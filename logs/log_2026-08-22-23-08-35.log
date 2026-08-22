@@ -1,0 +1,6 @@
+[2026-08-22 23:08:35] lib::run(EunjonManager):[INFO] Log file created successfully.
+[2026-08-22 23:08:35] lib::run(EunjonManager):[INFO] Starting!
+[2026-08-22 23:08:35] lib::run(EunjonManager):[INFO] Version: 1.0.0
+[2026-08-22 23:08:35] windows::main_window::main_window(EunjonManager):[INFO] MainWindow starting.
+[2026-08-22 23:08:42] windows::main_window::main_window(EunjonManager):[INFO] MainWindow stopping.
+[2026-08-22 23:08:42] lib::run(EunjonManager):[INFO] Stopping!
