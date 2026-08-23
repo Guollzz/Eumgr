@@ -1,0 +1,169 @@
+export component MainWindow inherits Window {
+    title: "Eumgr";
+    icon: @image-url("../assets/icon/icon.png");
+    height: 710px;
+    width: 1200px;
+    background: transparent;  // Transparent background
+    no-frame: true;
+
+    // Declare close window callback and minimize callback to complete corresponding operations.
+    callback close_requested;
+    callback minimize_requested;
+
+    property <bool> is-dragging: false;
+    property <length> drag-start-x: 0px;
+    property <length> drag-start-y: 0px;
+    callback move-window(float, float);
+
+    // Rectangle {  //Title bar area detection.
+    //     width: parent.width;
+    //     height: 35px;
+    //     TouchArea {
+    //         width: 100%;
+    //         height: 100%;
+                
+    //         pointer-event(event) => {
+    //             if (event.kind == PointerEventKind.down) {
+    //                 root.is-dragging = true;
+    //                 root.drag-start-x = self.mouse-x;
+    //                 root.drag-start-y = self.mouse-y;
+    //             } else if (event.kind == PointerEventKind.up) {
+    //                 root.is-dragging = false;
+    //             }
+    //         }
+                
+    //         moved => {
+    //             if (root.is-dragging) {
+    //                 root.move-window(
+    //                     (self.mouse-x - root.drag-start-x) / 1px,
+    //                     (self.mouse-y - root.drag-start-y) / 1px
+    //                 );
+    //             }
+    //         }
+    //     }
+    // }   
+
+    VerticalLayout {  //Title bar area detection.
+        Rectangle {
+            height: 35px;
+            
+            touch-area := TouchArea {
+                width: 100%;
+                height: 100%;
+                
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down) {
+                        root.is-dragging = true;
+                        root.drag-start-x = self.mouse-x;
+                        root.drag-start-y = self.mouse-y;
+                    } else if (event.kind == PointerEventKind.up) {
+                        root.is-dragging = false;
+                    }
+                }
+                
+                moved => {
+                    if (root.is-dragging) {
+                        root.move-window(
+                            (self.mouse-x - root.drag-start-x) / 1px,
+                            (self.mouse-y - root.drag-start-y) / 1px
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Text {
+        x: 15px;
+        y: 5px;
+        text: "Eumgr";
+        color: white;
+        font-size: 25px;
+        //font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    Rectangle {  // 1px White stroke
+        width: parent.width;
+        height: parent.height;
+        border-width: 1px;
+        border-color: #ffffff;  
+        border-radius: 8px;
+    }
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: rgba(255, 255, 255, 0.18); 
+        border-width:1px;
+        border-color:rgba(255,255,255,0.35);
+        border-radius: 8px;
+    }
+
+    Rectangle {  // Title bar divider line
+        y: 35px;
+        width: 1175px;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.2);  
+    }
+
+    Rectangle {  //Close button
+        x: parent.width - 5px - 30px;
+        y: 5px;                      
+        width: 25px;
+        height: 25px;
+        border-radius: 12.5px;          
+        background: close_button.has-hover?rgba(255, 255, 255, 0.5):rgba(255, 255, 255, 0.18); 
+        transform-rotation: 45deg;
+        border-width:1px;
+        border-color:rgba(255,255,255,0.35);
+
+        Text {
+            text: "+";
+            color: white;
+            font-size: 30px;
+            //font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        // Click interaction.
+        close_button := TouchArea {
+            clicked => {
+                close_requested();
+            }
+        }
+    }
+
+    Rectangle {  //Minimize button.
+        x: parent.width - 5px - 30px - 30px;
+        y: 5px;                      
+        width: 25px;
+        height: 25px;
+        border-radius: 12.5px;          
+        background: minimize_button.has-hover?rgba(255, 255, 255, 0.5):rgba(255, 255, 255, 0.18); 
+        border-width:1px;
+        border-color:rgba(255,255,255,0.35);
+        Text {
+            y: -1px;
+            text: "—";
+            color: white;
+            font-size: 17px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        // Click interaction.
+        minimize_button := TouchArea {
+            clicked => {
+                minimize_requested();
+            }
+        }
+    }
+}
