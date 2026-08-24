@@ -2,11 +2,12 @@ mod logs;
 mod windows;
 use std::panic;
 
-const IS_RELEASE: bool = true;
+const IS_RELEASE: bool = false;
 pub const VERSION: &str = if IS_RELEASE {
     env!("CARGO_PKG_VERSION")
 } else {
-    "26Beta0"
+    // "x.x-pre-1"
+    concat!("Beta ", env!("CARGO_PKG_VERSION"))
 };
 
 pub fn run() {

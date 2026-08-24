@@ -1,5 +1,6 @@
 use crate::logs;
 use slint::{LogicalPosition, ComponentHandle};
+use std::path::Path;
 
 slint::include_modules!();
 
@@ -7,6 +8,13 @@ pub fn main_window() {
     logs::logs_output::logs_output("windows::main_window::main_window", "MainWindow starting.", "info");
 
     let app = MainWindow::new().unwrap();
+
+    let arr = slint::bundled_translations();
+    println!("=== 已打包的语言列表：{arr:?}");
+    match slint::select_bundled_translation("zh_CN") {
+        Ok(_) => println!("切换成功"),
+        Err(e) => eprintln!("切换失败 {e:?}"),
+    }
 
     let app_handle = app.as_weak(); // Get a clone of the window handle for subsequent operations.
 

@@ -1,0 +1,2 @@
+$files = Get-ChildItem -Path . -Recurse -Filter *.slint | ForEach-Object { $_.FullName }
+slint-tr-extractor -o eumgr.pot $files

@@ -1,6 +1,6 @@
 [package]
 name = "eumgr"
-version = "1.0.0"
+version = "0.1.0"
 edition = "2024"
 
 [dependencies]
@@ -8,7 +8,7 @@ colored = "3"
 chrono = "0.4"
 once_cell = "1.19"
 log = "0.4.34"
-slint = "1.17.1"
+slint = {version ="1.17.1", features = ["gettext"]}
 slint-interpreter = "1.17.1"
 
 [build-dependencies]

@@ -43,8 +43,8 @@ export component MainWindow inherits Window {
     //     }
     // }   
 
-    VerticalLayout {  //Title bar area detection.
-        Rectangle {
+    VerticalLayout {  // Title bar area detection.
+        Rectangle {  // Handle window dragging.
             height: 35px;
             
             touch-area := TouchArea {
@@ -164,6 +164,75 @@ export component MainWindow inherits Window {
             clicked => {
                 minimize_requested();
             }
+        }
+    }
+
+    Rectangle {  // Switch page.
+        HorizontalLayout {
+            //x: 100px;
+            alignment: center;
+            padding-top: 5px;
+
+            Rectangle {
+                width: 75px + 5px + 75px;
+                height: 25px;
+
+                background: rgba(255, 255, 255, 0.18); 
+                border-width:1px;
+                border-color:rgba(255,255,255,0.35);
+
+                border-radius: 12.5px;
+
+                Rectangle {  // Workspace button.
+                    x: 0px;
+
+                    width: 75px;
+                    height: 25px;
+
+                    Text {
+                        width: parent.width;
+                        height: parent.height;
+
+                        text: @tr("Workspace");
+                        color: white;
+                        font-size: 15px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    // background: rgba(255, 255, 255, 0.18); 
+                    // border-width:1px;
+                    // border-color:rgba(255,255,255,0.35);
+
+                    // border-radius: 12.5px;
+                }   
+
+                Rectangle {  // Settings button.
+                    x: 5px + 75px;
+                    
+                    width: 75px;
+                    height: 25px;
+
+                    // background: rgba(255, 255, 255, 0.18); 
+                    // border-width:1px;
+                    // border-color:rgba(255,255,255,0.35);
+
+                    // border-radius: 12.5px;
+
+                    Text {
+                        width: parent.width;
+                        height: parent.height;
+
+                        text: @tr("Settings");
+                        color: white;
+                        font-size: 15px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }   
         }
     }
 }
