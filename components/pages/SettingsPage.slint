@@ -1,0 +1,93 @@
+import { ScrollView } from "std-widgets.slint";
+
+export component SettingsPage inherits Rectangle {
+    background: transparent;
+    height: 630px;
+    width: 1190px;
+
+    in-out property<string> general: "general";
+    in-out property<string> about: "about";
+    
+    Rectangle {  // Sidebar.
+        x: 5px;
+        y: 5px;
+        height: 620px;
+        width: 200px;
+        background: rgba(255, 255, 255, 0.3); 
+        border-width:1px;
+        border-color: rgba(255, 255, 255, 0.35);
+        border-radius: 18px;
+
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 36px;
+
+            ScrollView {
+                height: 584px;
+                width: 200px;
+
+                // Define the positions of the three target controls (for easy reuse).
+                private property <length> general-button-y: 0px;
+                private property <length> about-button-y:50px;
+
+                // State variable: records the current target position to follow.
+                in-out property <length> target-y: 0px;
+
+                Rectangle {  // Selected highlight shell.
+                    width: 200px;
+                    height: 50px;
+                    background: rgba(255, 255, 255, 0.3); 
+                    border-width:1px;
+                    border-color: rgba(255, 255, 255, 0.35);
+                    y: target-y;
+
+                    animate y { 
+                        duration: 300ms; easing: ease-in-out; 
+                    }
+                }
+
+                Rectangle {  // General button.
+                    y: general-button-y;
+                    width: 200px;
+                    height: 50px;
+                    background: general_button.has-hover?rgba(255, 255, 255, 0.18):rgba(255, 255, 255, 0); 
+                    border-width:1px;
+                    border-color: general_button.has-hover?rgba(255, 255, 255, 0.35):rgba(255, 255, 255, 0);
+
+                    Text {
+                        text: general;
+                        color: white;
+                        font-size: 20px;
+                    }
+
+                    general_button := TouchArea {
+                        clicked => {
+                            target-y = general-button-y;
+                        }
+                    }
+                }
+
+                Rectangle {  // About button
+                    y: about-button-y;
+                    width: 200px;
+                    height: 50px;
+                    background: about_button.has-hover?rgba(255, 255, 255, 0.18):rgba(255, 255, 255, 0); 
+                    border-width:1px;
+                    border-color: about_button.has-hover?rgba(255, 255, 255, 0.35):rgba(255, 255, 255, 0);
+
+                    Text {
+                        text: about;
+                        color: white;
+                        font-size: 20px;
+                    }
+
+                    about_button := TouchArea {
+                        clicked => {
+                            target-y = about-button-y;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

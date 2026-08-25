@@ -1,20 +1,45 @@
-use crate::logs;
+use crate::{logs, pages::settings_page};
 use slint::{LogicalPosition, ComponentHandle};
-use std::path::Path;
+use crate::i18n::i18n::Locale;
+use chrono::Local;
+use slint::Timer;
 
 slint::include_modules!();
+
+fn update_time(app: &MainWindow) {
+    let now = Local::now();
+    let time_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
+    app.set_dynamic_island_text(time_str.into());
+}
 
 pub fn main_window() {
     logs::logs_output::logs_output("windows::main_window::main_window", "MainWindow starting.", "info");
 
     let app = MainWindow::new().unwrap();
 
-    let arr = slint::bundled_translations();
-    println!("=== 已打包的语言列表：{arr:?}");
-    match slint::select_bundled_translation("zh_CN") {
-        Ok(_) => println!("切换成功"),
-        Err(e) => eprintln!("切换失败 {e:?}"),
-    }
+    update_time(&app);  // Update time immediately once.
+    let handle2 = app.as_weak();
+    let timer = Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_secs(1),
+        move || {
+            if let Some(app) = handle2.upgrade() {
+                update_time(&app);
+            }
+        }
+    );
+
+
+    let mut current_locale = Locale::load("zh-CN").unwrap();
+    let update_app_texts = |app: &MainWindow, loc: &Locale| {
+        app.set_workspace(loc.t("workspace").into());
+        app.set_settings(loc.t("settings").into());
+        app.set_general(loc.t("general").into());
+        app.set_about(loc.t("about").into());
+        logs::logs_output::logs_output("windows::main_window::main_window", "Language loaded.", "info");
+    };
+    update_app_texts(&app, &current_locale);
 
     let app_handle = app.as_weak(); // Get a clone of the window handle for subsequent operations.
 

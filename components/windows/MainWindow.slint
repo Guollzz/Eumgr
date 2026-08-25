@@ -1,9 +1,13 @@
+import { WorkspacePage } from "../pages/WorkspacePage.slint";
+import { SettingsPage } from "../pages/SettingsPage.slint";
+
 export component MainWindow inherits Window {
     title: "Eumgr";
-    icon: @image-url("../assets/icon/icon.png");
+    icon: @image-url("../../assets/icon/icon.png");
     height: 710px;
     width: 1200px;
-    background: transparent;  // Transparent background
+    //background: transparent;  // Transparent background
+    background: black;
     no-frame: true;
 
     // Declare close window callback and minimize callback to complete corresponding operations.
@@ -15,33 +19,13 @@ export component MainWindow inherits Window {
     property <length> drag-start-y: 0px;
     callback move-window(float, float);
 
-    // Rectangle {  //Title bar area detection.
-    //     width: parent.width;
-    //     height: 35px;
-    //     TouchArea {
-    //         width: 100%;
-    //         height: 100%;
-                
-    //         pointer-event(event) => {
-    //             if (event.kind == PointerEventKind.down) {
-    //                 root.is-dragging = true;
-    //                 root.drag-start-x = self.mouse-x;
-    //                 root.drag-start-y = self.mouse-y;
-    //             } else if (event.kind == PointerEventKind.up) {
-    //                 root.is-dragging = false;
-    //             }
-    //         }
-                
-    //         moved => {
-    //             if (root.is-dragging) {
-    //                 root.move-window(
-    //                     (self.mouse-x - root.drag-start-x) / 1px,
-    //                     (self.mouse-y - root.drag-start-y) / 1px
-    //                 );
-    //             }
-    //         }
-    //     }
-    // }   
+    in-out property<string> dynamic-island-text: "dynamic-island-text";
+    in-out property<string> workspace: "workspace";
+    in-out property<string> settings: "settings";
+    in-out property <string> general: "general";
+    in-out property <string> about: "about";
+
+    in-out property <int> operation-area-page: 0;
 
     VerticalLayout {  // Title bar area detection.
         Rectangle {  // Handle window dragging.
@@ -183,8 +167,29 @@ export component MainWindow inherits Window {
 
                 border-radius: 12.5px;
 
+                // Define the positions of the three target controls (for easy reuse).
+                private property <length> workspace-button-x: 0px;
+                private property <length> settings-button-x: 5px + 75px;
+
+                // State variable: records the current target position to follow.
+                in-out property <length> target-x: 0px;
+
+                Rectangle {  // Selected highlight shell.
+                    width: 75px;
+                    height: 25px;
+                    background: rgba(255, 255, 255, 0.3); 
+                    border-width:1px;
+                    border-color: rgba(255, 255, 255, 0.35);
+                    border-radius: 12.5px;
+                    x: target-x;
+
+                    animate x { 
+                        duration: 300ms; easing: ease-in-out; 
+                    }
+                }
+
                 Rectangle {  // Workspace button.
-                    x: 0px;
+                    x: workspace-button-x;
 
                     width: 75px;
                     height: 25px;
@@ -193,7 +198,7 @@ export component MainWindow inherits Window {
                         width: parent.width;
                         height: parent.height;
 
-                        text: @tr("Workspace");
+                        text: workspace;
                         color: white;
                         font-size: 15px;
                         horizontal-alignment: center;
@@ -201,38 +206,101 @@ export component MainWindow inherits Window {
                         overflow: elide;
                     }
 
-                    // background: rgba(255, 255, 255, 0.18); 
-                    // border-width:1px;
-                    // border-color:rgba(255,255,255,0.35);
+                    background: workspace_button.has-hover?rgba(255, 255, 255, 0.18):rgba(255, 255, 255, 0); 
+                    border-width:1px;
+                    border-color:workspace_button.has-hover?rgba(255, 255, 255, 0.35):rgba(255, 255, 255, 0);
 
-                    // border-radius: 12.5px;
+                    border-radius: 12.5px;
+
+                    workspace_button := TouchArea{
+                        clicked => {
+                            target-x = workspace-button-x;
+                            operation-area-page = 0;
+                        }
+                    }
                 }   
 
                 Rectangle {  // Settings button.
-                    x: 5px + 75px;
+                    x: settings-button-x;
                     
                     width: 75px;
                     height: 25px;
 
-                    // background: rgba(255, 255, 255, 0.18); 
-                    // border-width:1px;
-                    // border-color:rgba(255,255,255,0.35);
+                    background: settings_button.has-hover?rgba(255, 255, 255, 0.18):rgba(255, 255, 255, 0); 
+                    border-width:1px;
+                    border-color:  settings_button.has-hover?rgba(255, 255, 255, 0.35):rgba(255, 255, 255, 0);
 
-                    // border-radius: 12.5px;
+                    border-radius: 12.5px;
 
                     Text {
                         width: parent.width;
                         height: parent.height;
 
-                        text: @tr("Settings");
+                        text: settings;
                         color: white;
                         font-size: 15px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         overflow: elide;
                     }
+
+                    settings_button := TouchArea {
+                        clicked => {
+                            target-x = settings-button-x;
+                            operation-area-page = 1;
+                        }
+                    }
                 }
             }   
+        }
+    }
+
+    Rectangle {  // Dynamic Island.
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 40px;
+
+            Text {
+                height: 30px;
+                text: dynamic-island-text;
+                color: white;
+                font-size: 25px;
+
+                Rectangle {
+                    width: parent.width + 10px;
+                    height: parent.height;
+                    background: rgba(255, 255, 255, 0.3); 
+                    border-width:1px;
+                    border-color: rgba(255, 255, 255, 0.35);
+                    border-radius: 15px;
+                }
+            }
+        }
+    }
+
+    Rectangle {  // Operation area.
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 35px;
+            width: 1190px;
+            height: 630px;
+
+            Rectangle {
+                width: parent.width;
+                height: parent.height;
+                background: rgba(255, 255, 255, 0.3); 
+                border-width:1px;
+                border-color: rgba(255, 255, 255, 0.35);
+                border-radius: 23px;
+
+                if operation-area-page == 0 : WorkspacePage {
+
+                }
+                if operation-area-page == 1 : SettingsPage {
+                    general: general;
+                    about: about;
+                }
+            }
         }
     }
 }
