@@ -1,4 +1,4 @@
-use crate::{logs, pages::settings_page};
+use crate::logs;
 use slint::{LogicalPosition, ComponentHandle};
 use crate::i18n::i18n::Locale;
 use chrono::Local;
@@ -29,7 +29,6 @@ pub fn main_window() {
             }
         }
     );
-
 
     let mut current_locale = Locale::load("zh-CN").unwrap();
     let update_app_texts = |app: &MainWindow, loc: &Locale| {

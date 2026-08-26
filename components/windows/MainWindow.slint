@@ -7,7 +7,18 @@ export component MainWindow inherits Window {
     height: 710px;
     width: 1200px;
     //background: transparent;  // Transparent background
-    background: black;
+    background: grey;
+    // Rectangle {  // Use the Image element to host the background image.
+    //     width: 100%;
+    //     height: 100%;
+    //     Image {
+    //         source: @image-url("../../assets/icon/icon.png");
+    //         image-fit: cover;
+    //         width: 100%;
+    //         height: 100%;
+    //     }
+    // }
+
     no-frame: true;
 
     // Declare close window callback and minimize callback to complete corresponding operations.
@@ -61,12 +72,12 @@ export component MainWindow inherits Window {
         x: 15px;
         y: 5px;
         text: "Eumgr";
-        color: white;
+        color: black;
         font-size: 25px;
         //font-weight: 700;
         horizontal-alignment: center;
         vertical-alignment: center;
-    }
+    } 
 
     Rectangle {  // 1px White stroke
         width: parent.width;
@@ -89,7 +100,7 @@ export component MainWindow inherits Window {
         y: 35px;
         width: 1175px;
         height: 1px;
-        background: rgba(255, 255, 255, 0.2);  
+        background: rgba(0, 0, 0, 0.2);  
     }
 
     Rectangle {  //Close button
@@ -105,7 +116,7 @@ export component MainWindow inherits Window {
 
         Text {
             text: "+";
-            color: white;
+            color: black;
             font-size: 30px;
             //font-weight: 700;
             horizontal-alignment: center;
@@ -134,7 +145,7 @@ export component MainWindow inherits Window {
         Text {
             y: -1px;
             text: "—";
-            color: white;
+            color: black;
             font-size: 17px;
             font-weight: 700;
             horizontal-alignment: center;
@@ -199,7 +210,7 @@ export component MainWindow inherits Window {
                         height: parent.height;
 
                         text: workspace;
-                        color: white;
+                        color: black;
                         font-size: 15px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -237,7 +248,7 @@ export component MainWindow inherits Window {
                         height: parent.height;
 
                         text: settings;
-                        color: white;
+                        color: black;
                         font-size: 15px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -263,8 +274,10 @@ export component MainWindow inherits Window {
             Text {
                 height: 30px;
                 text: dynamic-island-text;
-                color: white;
-                font-size: 25px;
+                color: black;
+                font-size: 20px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
 
                 Rectangle {
                     width: parent.width + 10px;

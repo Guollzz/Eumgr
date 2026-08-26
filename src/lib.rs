@@ -2,7 +2,6 @@ mod logs;
 mod windows;
 use std::panic;
 mod i18n;
-mod pages;
 
 const IS_RELEASE: bool = false;
 pub const VERSION: &str = if IS_RELEASE {
