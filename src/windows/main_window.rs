@@ -3,6 +3,7 @@ use slint::{LogicalPosition, ComponentHandle};
 use crate::i18n::i18n::Locale;
 use chrono::Local;
 use slint::Timer;
+use crate::VERSION;
 
 slint::include_modules!();
 
@@ -17,6 +18,8 @@ pub fn main_window() {
 
     let app = MainWindow::new().unwrap();
 
+    app.set_version(format!("{}", VERSION).into());
+
     update_time(&app);  // Update time immediately once.
     let handle2 = app.as_weak();
     let timer = Timer::default();
@@ -30,15 +33,26 @@ pub fn main_window() {
         }
     );
 
-    let mut current_locale = Locale::load("zh-CN").unwrap();
+    let current_locale = Locale::load("zh-CN").unwrap();
     let update_app_texts = |app: &MainWindow, loc: &Locale| {
         app.set_workspace(loc.t("workspace").into());
         app.set_settings(loc.t("settings").into());
         app.set_general(loc.t("general").into());
         app.set_about(loc.t("about").into());
+        app.set_language(loc.t("Language").into());
         logs::logs_output::logs_output("windows::main_window::main_window", "Language loaded.", "info");
     };
     update_app_texts(&app, &current_locale);
+
+    let handle3 = app.as_weak();
+    app.global::<CallbackBridge>()
+        .on_general_page_language_selected(move |value| {
+                if let Some(app) = handle3.upgrade() {
+                    let current_locale = Locale::load(&value).unwrap();
+                    update_app_texts(&app, &current_locale);
+                    logs::logs_output::logs_output("windows::main_window::main_window", "Language update.", "info");
+                }
+            });
 
     let app_handle = app.as_weak(); // Get a clone of the window handle for subsequent operations.
 

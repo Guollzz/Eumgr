@@ -1,23 +1,34 @@
 import { WorkspacePage } from "../pages/WorkspacePage.slint";
 import { SettingsPage } from "../pages/SettingsPage.slint";
 
+export global CallbackBridge {
+    callback general-page-language-selected(string);
+}
+
 export component MainWindow inherits Window {
     title: "Eumgr";
     icon: @image-url("../../assets/icon/icon.png");
     height: 710px;
     width: 1200px;
-    //background: transparent;  // Transparent background
-    background: grey;
-    // Rectangle {  // Use the Image element to host the background image.
-    //     width: 100%;
-    //     height: 100%;
-    //     Image {
-    //         source: @image-url("../../assets/icon/icon.png");
-    //         image-fit: cover;
-    //         width: 100%;
-    //         height: 100%;
-    //     }
-    // }
+    background: transparent;  // Transparent background
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: 8px;
+        clip: true;
+        background: grey;
+        // Rectangle {  // Use the Image element to host the background image.
+        //     width: 100%;
+        //     height: 100%;
+        //     clip: true;
+        //     Image {
+        //         source: @image-url("../../assets/icon/icon.png");
+        //         image-fit: cover;
+        //         width: 100%;
+        //         height: 100%;
+        //     }
+        // }
+    }
 
     no-frame: true;
 
@@ -35,6 +46,8 @@ export component MainWindow inherits Window {
     in-out property<string> settings: "settings";
     in-out property <string> general: "general";
     in-out property <string> about: "about";
+    in-out property <string> version: "?";
+    in-out property<string> language: "language";
 
     in-out property <int> operation-area-page: 0;
 
@@ -312,6 +325,12 @@ export component MainWindow inherits Window {
                 if operation-area-page == 1 : SettingsPage {
                     general: general;
                     about: about;
+                    version: version;
+                    language: language;
+
+                    general-page-language(value) => {
+                        CallbackBridge.general-page-language-selected(value);
+                    }
                 }
             }
         }

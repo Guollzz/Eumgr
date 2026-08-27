@@ -1,5 +1,41 @@
+import { ComboBox } from "std-widgets.slint";
+
 export component GeneralPage inherits Rectangle {
     background: transparent;
     height: 620px;
     width: 975px;
+
+    callback general-page-language-combo-selected(string);
+
+    in-out property<string> language: "language";
+    property<string> lang: "zh-CN";
+
+    Text {
+        x: 18px;
+        y: 18px;
+        text: @tr("{}", language);
+        color: black;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-size: 20px;
+    }
+
+    ComboBox {
+        x: 18px;
+        y: 50px;
+        // Set the option list for the dropdown box.
+        model: ["简体中文", "English"];
+        // Set the default selected item.
+        current-value: "简体中文";
+
+        selected(value) => {
+            if value == "简体中文" {
+                lang = "zh-CN";
+            }
+            if value == "English" {
+                lang = "en";
+            }
+            general-page-language-combo-selected(lang);
+        }
+    }
 }

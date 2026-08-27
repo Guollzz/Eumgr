@@ -19,7 +19,7 @@ impl Locale {
             .ok_or(format!("Language resource not found.: {file_name}"))?;
 
         let text = file.contents_utf8()
-            .ok_or("Language file is not UTF‑8 text.")?;
+            .ok_or("Language file is not UTF-8 text.")?;
 
         let locale: Locale = serde_json::from_str(text)?;
         Ok(locale)

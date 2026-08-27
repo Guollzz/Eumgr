@@ -7,8 +7,12 @@ export component SettingsPage inherits Rectangle {
     height: 630px;
     width: 1190px;
 
+    callback general-page-language(string);
+
     in-out property<string> general: "general";
     in-out property<string> about: "about";
+    in-out property <string> version: "?";
+    in-out property<string> language: "language";
 
     in-out property <int> setting-interface-page: 0;
     
@@ -67,6 +71,7 @@ export component SettingsPage inherits Rectangle {
                     general_button := TouchArea {
                         clicked => {
                             target-y = general-button-y;
+                            setting-interface-page = 0;
                         }
                     }
                 }
@@ -88,6 +93,7 @@ export component SettingsPage inherits Rectangle {
                     about_button := TouchArea {
                         clicked => {
                             target-y = about-button-y;
+                            setting-interface-page = 1;
                         }
                     }
                 }
@@ -104,5 +110,17 @@ export component SettingsPage inherits Rectangle {
         border-width:1px;
         border-color: rgba(255, 255, 255, 0.35);
         border-radius: 18px;
+
+        if setting-interface-page == 0 : GeneralPage {
+            language: language;
+
+            general-page-language-combo-selected(value) => {
+                general-page-language(value)
+            }
+        }
+
+        if setting-interface-page == 1 : AboutPage {
+            version: version;
+        }
     }
 }

@@ -2,5 +2,6 @@
   "workspace": "Workspace",
   "settings": "Settings",
   "general": "General",
-  "about": "About"
+  "about": "About",
+  "language": "Language"
 }

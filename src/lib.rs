@@ -3,12 +3,11 @@ mod windows;
 use std::panic;
 mod i18n;
 
-const IS_RELEASE: bool = false;
+const IS_RELEASE: bool = true;
 pub const VERSION: &str = if IS_RELEASE {
     env!("CARGO_PKG_VERSION")
 } else {
-    // "x.x-pre-1"
-    concat!("Beta ", env!("CARGO_PKG_VERSION"))
+    "x.x-pre-1"
 };
 
 pub fn run() {
