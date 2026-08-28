@@ -48,6 +48,7 @@ export component MainWindow inherits Window {
     in-out property <string> about: "about";
     in-out property <string> version: "?";
     in-out property<string> language: "language";
+    in-out property<string> current-language: "zh-CN";
 
     in-out property <int> operation-area-page: 0;
 
@@ -327,6 +328,7 @@ export component MainWindow inherits Window {
                     about: about;
                     version: version;
                     language: language;
+                    current-language: current-language;
 
                     general-page-language(value) => {
                         CallbackBridge.general-page-language-selected(value);

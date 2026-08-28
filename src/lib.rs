@@ -2,6 +2,7 @@ mod logs;
 mod windows;
 use std::panic;
 mod i18n;
+mod config;
 
 const IS_RELEASE: bool = true;
 pub const VERSION: &str = if IS_RELEASE {
@@ -23,7 +24,10 @@ pub fn run() {
     logs::logs_output::logs_output("lib::run", "Starting!", "info");
     logs::logs_output::logs_output("lib::run", &format!("Version: {}", VERSION), "info");
 
-    windows::main_window::main_window();
+    let config = config::Config::load_or_create("config.json");
+    logs::logs_output::logs_output("lib::run", "Configuration initialization complete.", "info");
+
+    windows::main_window::main_window().unwrap();
 
     logs::logs_output::logs_output("lib::run", "Stopping!", "info");
 }

@@ -1,9 +1,11 @@
 use crate::logs;
+use slint::language;
 use slint::{LogicalPosition, ComponentHandle};
 use crate::i18n::i18n::Locale;
 use chrono::Local;
 use slint::Timer;
 use crate::VERSION;
+use crate::config;
 
 slint::include_modules!();
 
@@ -13,13 +15,16 @@ fn update_time(app: &MainWindow) {
     app.set_dynamic_island_text(time_str.into());
 }
 
-pub fn main_window() {
+pub fn main_window() -> Result<(), Box<dyn std::error::Error>> {
     logs::logs_output::logs_output("windows::main_window::main_window", "MainWindow starting.", "info");
+
+    let mut config_file = config::Config::load_or_create("config.json")?;
+    logs::logs_output::logs_output("main_window::main_window", "Configuration file has been loaded in main_window.", "info");
 
     let app = MainWindow::new().unwrap();
 
     app.set_version(format!("{}", VERSION).into());
-
+ 
     update_time(&app);  // Update time immediately once.
     let handle2 = app.as_weak();
     let timer = Timer::default();
@@ -33,23 +38,30 @@ pub fn main_window() {
         }
     );
 
-    let current_locale = Locale::load("zh-CN").unwrap();
+    let config_path = "config.json";
+    let mut language = config::Config::get_string_field(config_path, "language")?;
+    let current_locale = Locale::load(&language).unwrap();
     let update_app_texts = |app: &MainWindow, loc: &Locale| {
         app.set_workspace(loc.t("workspace").into());
         app.set_settings(loc.t("settings").into());
         app.set_general(loc.t("general").into());
         app.set_about(loc.t("about").into());
-        app.set_language(loc.t("Language").into());
+        app.set_language(loc.t("language").into());
         logs::logs_output::logs_output("windows::main_window::main_window", "Language loaded.", "info");
     };
     update_app_texts(&app, &current_locale);
+    app.set_current_language(language.clone().into());
 
     let handle3 = app.as_weak();
     app.global::<CallbackBridge>()
         .on_general_page_language_selected(move |value| {
                 if let Some(app) = handle3.upgrade() {
                     let current_locale = Locale::load(&value).unwrap();
+                    language = value.to_string();
+                    config_file.language = language.clone();
+                    config_file.save("config.json").unwrap();
                     update_app_texts(&app, &current_locale);
+                    app.set_current_language(language.clone().into());
                     logs::logs_output::logs_output("windows::main_window::main_window", "Language update.", "info");
                 }
             });
@@ -81,4 +93,6 @@ pub fn main_window() {
     app.run().unwrap();
 
     logs::logs_output::logs_output("windows::main_window::main_window", "MainWindow stopping.", "info");
+
+    Ok(())
 }

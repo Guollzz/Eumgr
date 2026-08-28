@@ -13,6 +13,7 @@ export component SettingsPage inherits Rectangle {
     in-out property<string> about: "about";
     in-out property <string> version: "?";
     in-out property<string> language: "language";
+    in-out property<string> current-language: "zh-CN";
 
     in-out property <int> setting-interface-page: 0;
     
@@ -113,6 +114,7 @@ export component SettingsPage inherits Rectangle {
 
         if setting-interface-page == 0 : GeneralPage {
             language: language;
+            lang: current-language;
 
             general-page-language-combo-selected(value) => {
                 general-page-language(value)
