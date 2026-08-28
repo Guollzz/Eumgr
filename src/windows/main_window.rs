@@ -1,5 +1,4 @@
 use crate::logs;
-use slint::language;
 use slint::{LogicalPosition, ComponentHandle};
 use crate::i18n::i18n::Locale;
 use chrono::Local;
