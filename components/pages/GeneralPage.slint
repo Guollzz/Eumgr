@@ -32,23 +32,32 @@ export component GeneralPage inherits Rectangle {
         font-size: 20px;
     }
 
-    ComboBox {
+    Rectangle {
         x: 18px;
         y: 50px;
-        // Set the option list for the dropdown box.
-        model: ["简体中文", "English"];
-        // Set the default selected item.
-        current-value: view-language;
-        current-index: language-num;
+        width: 160px;
+        height: 33px;
+        background: rgba(0, 0, 0, 0.18);
+        border-color: rgba(255, 255, 255, 0.35);
+        border-radius: 5px;
+        // drop-shadow-blur: 5px;
+        // drop-shadow-color: rgba(0, 0, 0, 1); // Use semi-transparent black for a softer effect.
+        ComboBox {
+            // Set the option list for the dropdown box.
+            model: ["简体中文", "English"];
+            // Set the default selected item.
+            current-value: view-language;
+            current-index: language-num;
 
-        selected(value) => {
-            if value == "简体中文" {
-                lang = "zh-CN";
+            selected(value) => {
+                if value == "简体中文" {
+                    lang = "zh-CN";
+                }
+                if value == "English" {
+                    lang = "en";
+                }
+                general-page-language-combo-selected(lang);
             }
-            if value == "English" {
-                lang = "en";
-            }
-            general-page-language-combo-selected(lang);
         }
     }
 }
