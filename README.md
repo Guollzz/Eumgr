@@ -1,2 +1,2 @@
 # Eumgr
-A file manager better suited for video creators.
+A more suitable resource manager for video creators
