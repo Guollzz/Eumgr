@@ -1,0 +1,541 @@
+// Launchpad page: a grid of square tiles, one per entry.
+//
+// Layout (design values, do not move them without a design decision):
+//
+//   top right : toolbar  [selection box] [select] [start all]
+//   below     : 5 columns of 200x200 tiles with 16px gaps, vertically
+//               scrollable (never horizontally), the last slot is the "+" tile
+//
+// The page only renders; every action is reported through a callback and the
+// Rust side owns the data (configuration, processes, log lines).
+
+import { ScrollView } from "std-widgets.slint";
+
+// A capsule button of the toolbar. Declared here (and not in MainWindow.slint)
+// because nothing else uses it.
+component ToolbarButton inherits Rectangle {
+    // Caption, already localised by the caller.
+    in property <string> caption;
+    // Primary buttons are filled with the accent colour and use white text.
+    in property <bool> primary: false;
+    callback activated;
+
+    height: 30px;
+    // Grows with the caption so longer translations are not clipped; 64px is
+    // the smallest button the design allows.
+    width: max(64px, caption-label.width + 24px);
+    border-radius: 15px;
+    background: root.primary ? #4B5563 : #FFFFFF;
+    border-width: root.primary ? 0px : 1px;
+    border-color: #E4E7EB;
+    drop-shadow-color: rgba(0, 0, 0, 0.12);
+    drop-shadow-blur: 8px;
+    drop-shadow-offset-y: 3px;
+
+    // Centred by hand: `width: parent.width` on the text would make the button
+    // width and the caption width depend on each other (binding loop).
+    caption-label := Text {
+        text: root.caption;
+        color: root.primary ? #FFFFFF : #1F2328;
+        font-size: 14px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.activated();
+        }
+        mouse-cursor: pointer;
+    }
+}
+
+// One square tile: an icon plate with the first letter of the entry and the
+// entry name below it. Left click starts the entry, right click shows a small
+// menu on the tile itself (open / remove) instead of acting immediately.
+component ItemTile inherits Rectangle {
+    // Entry name, shown in the tile.
+    in property <string> name;
+    // First letter of the name, drawn on the icon plate.
+    in property <string> letter;
+    // True while the tile menu of this tile is shown.
+    in property <bool> menu-open: false;
+    // Localised entries of the menu.
+    in property <string> menu-open-text: "";
+    in property <string> menu-remove-text: "";
+    callback activated;
+    callback menu-requested;
+    callback menu-dismiss;
+    callback menu-launch;
+    callback menu-remove;
+
+    width: 200px;
+    height: 200px;
+    background: tile-touch.has-hover ? #FAFBFC : #FFFFFF;
+    border-width: 1px;
+    border-color: #E4E7EB;
+    border-radius: 12px;
+    drop-shadow-color: rgba(0, 0, 0, 0.12);
+    drop-shadow-blur: 8px;
+    drop-shadow-offset-y: 3px;
+
+    Rectangle {  // Icon plate
+        width: 64px;
+        height: 64px;
+        x: (parent.width - self.width) / 2;
+        y: 44px;
+        background: #F1F3F5;
+        border-width: 1px;
+        border-color: #E4E7EB;
+        border-radius: 14px;
+
+        Text {
+            text: root.letter;
+            color: #1F2328;
+            font-size: 26px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+
+    Text {  // Entry name, up to two lines, then elided
+        x: 16px;
+        y: 124px;
+        width: parent.width - 32px;
+        height: 48px;
+        text: root.name;
+        color: #1F2328;
+        font-size: 15px;
+        wrap: word-wrap;
+        overflow: elide;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    tile-touch := TouchArea {
+        // Left starts the entry, right opens the tile menu (open / remove) so a
+        // mis-click cannot delete anything.
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                root.activated();
+            }
+            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.right) {
+                root.menu-requested();
+            }
+        }
+        mouse-cursor: pointer;
+    }
+
+    // The menu is drawn on the tile itself, so its hit area is exactly where it
+    // is visible and no page coordinates have to be computed for it.
+    if root.menu-open : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: rgba(31, 35, 40, 0.10);
+        border-radius: 12px;
+
+        // Swallows every click that is not on one of the two rows and closes
+        // the menu instead of starting the entry.
+        menu-dismiss-touch := TouchArea {
+            clicked => {
+                root.menu-dismiss();
+            }
+        }
+
+        Rectangle {  // Menu card
+            width: parent.width - 32px;
+            height: 84px;
+            x: 16px;
+            y: (parent.height - self.height) / 2;
+            background: #FFFFFF;
+            border-width: 1px;
+            border-color: #E4E7EB;
+            border-radius: 10px;
+            drop-shadow-color: rgba(0, 0, 0, 0.16);
+            drop-shadow-blur: 12px;
+            drop-shadow-offset-y: 3px;
+
+            menu-open-row := Rectangle {
+                x: 6px;
+                y: 6px;
+                width: parent.width - 12px;
+                height: 34px;
+                background: menu-open-touch.has-hover ? #F1F3F5 : transparent;
+                border-radius: 6px;
+
+                Text {
+                    x: 10px;
+                    y: (parent.height - self.height) / 2;
+                    text: root.menu-open-text;
+                    color: #1F2328;
+                    font-size: 14px;
+                }
+
+                menu-open-touch := TouchArea {
+                    clicked => {
+                        root.menu-launch();
+                    }
+                    mouse-cursor: pointer;
+                }
+            }
+
+            menu-remove-row := Rectangle {
+                x: 6px;
+                y: 44px;
+                width: parent.width - 12px;
+                height: 34px;
+                background: menu-remove-touch.has-hover ? #FDECEC : transparent;
+                border-radius: 6px;
+
+                Text {
+                    x: 10px;
+                    y: (parent.height - self.height) / 2;
+                    text: root.menu-remove-text;
+                    color: #C0292E;
+                    font-size: 14px;
+                }
+
+                menu-remove-touch := TouchArea {
+                    clicked => {
+                        root.menu-remove();
+                    }
+                    mouse-cursor: pointer;
+                }
+            }
+        }
+    }
+}
+
+// The "+" tile at the end of the grid. Left click adds files, right click adds
+// a folder, which keeps both pickers reachable without a popup menu.
+component AddTile inherits Rectangle {
+    // Localised hint, for example "left click: add files / right click: add folder".
+    in property <string> hint;
+    callback add-files;
+    callback add-folder;
+
+    width: 200px;
+    height: 200px;
+    background: add-touch.has-hover ? #FAFBFC : #FFFFFF;
+    // Slightly darker than a normal tile border: it marks the tile as an action.
+    border-width: 1px;
+    border-color: #C9CFD6;
+    border-radius: 12px;
+
+    Text {
+        text: "+";
+        color: #57606A;
+        font-size: 44px;
+        x: (parent.width - self.width) / 2;
+        y: 52px;
+    }
+
+    Text {
+        x: 16px;
+        y: 126px;
+        width: parent.width - 32px;
+        height: 48px;
+        text: root.hint;
+        color: #57606A;
+        font-size: 12px;
+        wrap: word-wrap;
+        overflow: elide;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    add-touch := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                root.add-files();
+            }
+            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.right) {
+                root.add-folder();
+            }
+        }
+        mouse-cursor: pointer;
+    }
+}
+
+export component LaunchpadPage inherits Rectangle {
+    background: transparent;
+    height: 630px;
+    width: 1190px;
+
+    // ---- state owned by the Rust side -------------------------------------
+    // Names of the tiles, in display order.
+    in property <[string]> item-names;
+    // First letter of every name, drawn on the tile icon.
+    in property <[string]> item-letters;
+    // Which tiles take part in a continuous launch (same order as item-names).
+    in property <[bool]> item-continuous;
+    // Number of grid rows needed for the current tiles plus the "+" tile.
+    // Computed by the Rust side: Slint has no integer division, and rounding up
+    // in the language would need float arithmetic for a pure layout value.
+    in property <int> row-count: 1;
+    // Text of the box that shows what a continuous launch would start.
+    in property <string> summary-text: "";
+    // Localised texts.
+    in property <string> add-hint: "";
+    in property <string> run-text: "";
+    in property <string> select-text: "";
+    in property <string> selection-title: "";
+    in property <string> done-text: "";
+    // Localised entries of the tile context menu.
+    in property <string> menu-open-text: "";
+    in property <string> menu-remove-text: "";
+
+    // ---- actions reported to the Rust side --------------------------------
+    callback launch-item(int);
+    callback remove-item(int);
+    callback add-items();
+    callback add-folder();
+    callback toggle-continuous(int);
+    callback run-continuous();
+
+    // ---- view state -------------------------------------------------------
+    // Selection dialog of the continuous launch.
+    in-out property <bool> selection-open: false;
+
+    // Context menu of a tile: -1 means closed, otherwise the index of the tile
+    // whose menu is shown. The menu itself is drawn by the tile, so this is only
+    // the state that selects which tile shows it.
+    in-out property <int> menu-index: -1;
+
+    // A freshly created viewport whose content is taller than the visible area
+    // starts scrolled to its end, so park the grid at the top right after the
+    // component was built. It only runs on construction: later user scrolling
+    // and the scroll position kept while the tiles are refreshed are untouched.
+    init => {
+        grid-scroll.content-y = 0px;
+    }
+
+    // ---- grid geometry ----------------------------------------------------
+    // 5 * 200 + 4 * 16 = 1064px of tiles, centred inside the 1142px content
+    // width (1190 minus the 24px padding on both sides).
+    private property <int> columns: 5;
+    private property <length> tile-size: 200px;
+    private property <length> tile-gap: 16px;
+    private property <length> grid-left: 39px;
+    private property <length> grid-top: 72px;
+
+    // ---- toolbar, top right ----------------------------------------------
+    HorizontalLayout {
+        x: 0;
+        y: 16px;
+        width: parent.width;
+        height: 30px;
+        alignment: end;
+        padding-right: 24px;
+        spacing: 12px;
+
+        // The box that previewed what a continuous launch would start is gone:
+        // the selection dialog now shows the entries directly. Kept commented
+        // out so it can be brought back without rewriting it.
+        // Rectangle {  // Box: what a continuous launch would start
+        //     height: 30px;
+        //     // Grows with the text up to 320px; the Rust side already collapses
+        //     // long selections into "+N", so it never has to elide.
+        //     width: min(320px, summary-label.width + 24px);
+        //     background: #F1F3F5;
+        //     border-width: 1px;
+        //     border-color: #E4E7EB;
+        //     border-radius: 15px;
+        //
+        //     summary-label := Text {
+        //         text: root.summary-text;
+        //         color: #57606A;
+        //         font-size: 13px;
+        //         x: 12px;
+        //         y: (parent.height - self.height) / 2;
+        //     }
+        // }
+
+        ToolbarButton {
+            caption: root.select-text;
+            activated => {
+                root.selection-open = true;
+            }
+        }
+
+        ToolbarButton {
+            caption: root.run-text;
+            primary: true;
+            activated => {
+                root.run-continuous();
+            }
+        }
+    }
+
+    // ---- tile grid --------------------------------------------------------
+    // The ScrollView gets content-width = its own width, which disables
+    // horizontal scrolling by design: rows are fixed, only the height grows.
+    grid-scroll := ScrollView {
+        x: 24px;
+        y: grid-top;
+        width: 1142px;
+        height: 630px - grid-top - 16px;
+        content-width: self.width;
+        content-height: max(self.height, row-count * (tile-size + tile-gap) - tile-gap);
+
+        // One row element per grid row; each row places `columns` tiles itself.
+        // Nested loops are used because Slint has neither `%` nor integer
+        // division, so a flat index would need float maths for row/column.
+        for row in row-count : Rectangle {
+            width: 100%;
+            height: tile-size;
+            y: row * (tile-size + tile-gap);
+            background: transparent;
+
+            for col in columns : Rectangle {
+                x: grid-left + col * (tile-size + tile-gap);
+                width: tile-size;
+                height: tile-size;
+                background: transparent;
+
+                // `row * columns + col` is the position in item-names.
+                if row * columns + col < item-names.length : ItemTile {
+                    name: item-names[row * columns + col];
+                    letter: item-letters[row * columns + col];
+                    menu-open: root.menu-index == row * columns + col;
+                    menu-open-text: root.menu-open-text;
+                    menu-remove-text: root.menu-remove-text;
+                    activated => {
+                        root.launch-item(row * columns + col);
+                    }
+                    menu-requested => {
+                        root.menu-index = row * columns + col;
+                    }
+                    menu-dismiss => {
+                        root.menu-index = -1;
+                    }
+                    menu-launch => {
+                        root.launch-item(root.menu-index);
+                        root.menu-index = -1;
+                    }
+                    menu-remove => {
+                        root.remove-item(root.menu-index);
+                        root.menu-index = -1;
+                    }
+                }
+
+                // The "+" tile always follows the last real tile.
+                if row * columns + col == item-names.length : AddTile {
+                    hint: root.add-hint;
+                    add-files => {
+                        root.add-items();
+                    }
+                    add-folder => {
+                        root.add-folder();
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- continuous launch selection dialog -------------------------------
+    // Drawn on top of the page; the scrim closes it, the card swallows clicks.
+    if selection-open : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: rgba(31, 35, 40, 0.12);
+
+        scrim := TouchArea {
+            clicked => {
+                root.selection-open = false;
+            }
+        }
+
+        Rectangle {  // Dialog card
+            width: 520px;
+            height: 420px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #FFFFFF;
+            border-width: 1px;
+            border-color: #E4E7EB;
+            border-radius: 12px;
+            drop-shadow-color: rgba(0, 0, 0, 0.18);
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 6px;
+
+            Text {
+                x: 24px;
+                y: 20px;
+                text: root.selection-title;
+                color: #1F2328;
+                font-size: 16px;
+            }
+
+            ScrollView {  // One row per tile, toggled by clicking
+                x: 24px;
+                y: 56px;
+                width: 472px;
+                height: 292px;
+                content-width: self.width;
+                content-height: max(self.height, item-names.length * 44px);
+
+                for i in item-names.length : Rectangle {
+                    y: i * 44px;
+                    width: 100%;
+                    height: 44px;
+                    background: row-touch.has-hover ? #F5F6F8 : transparent;
+                    border-radius: 6px;
+
+                    Rectangle {  // Check box
+                        x: 8px;
+                        y: 12px;
+                        width: 20px;
+                        height: 20px;
+                        background: item-continuous[i] ? #4B5563 : #FFFFFF;
+                        border-width: 1px;
+                        border-color: item-continuous[i] ? #4B5563 : #C9CFD6;
+                        border-radius: 5px;
+
+                        // The tick is a path instead of a glyph: the fallback
+                        // font has no U+2713, so a Text tick rendered as a
+                        // stray dash, and Rectangle has no rotation angle.
+                        if item-continuous[i] : Path {
+                            width: 20px;
+                            height: 20px;
+                            commands: "M 5 11 L 9 15 L 15 6";
+                            stroke: #FFFFFF;
+                            stroke-width: 2px;
+                            fill: transparent;
+                        }
+                    }
+
+                    Text {
+                        x: 40px;
+                        width: 420px;
+                        text: item-names[i];
+                        color: #1F2328;
+                        font-size: 15px;
+                        overflow: elide;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    row-touch := TouchArea {
+                        clicked => {
+                            root.toggle-continuous(i);
+                        }
+                        mouse-cursor: pointer;
+                    }
+                }
+            }
+
+            ToolbarButton {
+                caption: root.done-text;
+                primary: true;
+                x: parent.width - self.width - 24px;
+                y: parent.height - self.height - 20px;
+                activated => {
+                    root.selection-open = false;
+                }
+            }
+        }
+    }
+
+}

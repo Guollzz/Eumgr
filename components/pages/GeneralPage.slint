@@ -1,0 +1,140 @@
+// General settings page: the language selector and the button that opens the
+// folder with the log files.
+//
+// The combo box is a standard widget, so it follows the palette that
+// MainWindow.slint pins to the light colour scheme.
+
+import { ComboBox } from "std-widgets.slint";
+
+export component GeneralPage inherits Rectangle {
+    background: transparent;
+    height: 620px;
+    width: 975px;
+
+    // Emitted with the new language code ("zh-CN" or "en") after a selection;
+    // SettingsPage forwards it to MainWindow and from there to the Rust side.
+    callback general-page-language-combo-selected(string);
+
+    // Emitted when the user asks for the folder that holds the log files.
+    // SettingsPage forwards it the same way as the language change.
+    callback general-page-open-logs();
+
+    // Localised label and the language code currently stored in the config.
+    in-out property <string> language: "language";
+    in-out property <string> lang: "zh-CN";
+    // Section label of the log block ("日志" / "Logs"), localised by Rust.
+    in property <string> logs: "logs";
+    // Label of the "open log folder" button, localised by the Rust side.
+    in property <string> open-logs-text: "open-logs";
+    // Item shown in the closed combo box (must match one entry of `model`).
+    property <string> view-language: "简体中文";
+    // Index of the selected entry inside `model`.
+    property <int> language-num: 1;
+
+    // Map the stored language code to the combo box entry.
+    //
+    // `init` alone is not enough: this page is destroyed when the user leaves
+    // the settings page and re-created when they come back, and at that moment
+    // the bound value of `lang` has not arrived yet (properties still hold
+    // their defaults while `init` runs), so the box would fall back to the
+    // first entry. `changed lang` runs as soon as the binding delivers the
+    // stored code, which keeps the selection correct across page switches.
+    init => { sync-language-entry(); }
+    changed lang => { sync-language-entry(); }
+
+    function sync-language-entry() {
+        if (lang == "en") {
+            view-language = "English";
+            language-num = 1;
+        } else {
+            view-language = "简体中文";
+            language-num = 0;
+        }
+    }
+
+
+    // Section label ("语言" / "Language").
+    Text {
+        x: 18px;
+        y: 18px;
+        text: @tr("{}", language);
+        color: #1F2328;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-size: 20px;
+    }
+
+    // Language selector. The surrounding rectangle is transparent: it only
+    // reserves the 160x33 slot so the combo box keeps the design size.
+    Rectangle {
+        x: 18px;
+        y: 50px;
+        width: 160px;
+        height: 33px;
+        background: transparent;
+        border-radius: 6px;
+
+        ComboBox {
+            width: 160px;
+            height: 33px;
+
+            // Selectable languages; keep in sync with the files in locales/.
+            model: ["简体中文", "English"];
+            // Preselected entry, derived from the stored config value.
+            current-value <=> view-language;
+            current-index <=> language-num;
+
+            selected(value) => {
+                // Translate the user facing label back into a language code.
+                if value == "简体中文" {
+                    lang = "zh-CN";
+                }
+                if value == "English" {
+                    lang = "en";
+                }
+                general-page-language-combo-selected(lang);
+            }
+        }
+    }
+
+    // Section label of the log block ("日志" / "Logs"), same style and x as the
+    // language label above.
+    Text {
+        x: 18px;
+        y: 118px;
+        text: @tr("{}", logs);
+        color: #1F2328;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-size: 20px;
+    }
+
+    // Opens the folder that contains the log file of this run. Styled like the
+    // other flat surfaces: white fill, 1px border, light grey on hover.
+    Rectangle {
+        x: 18px;
+        y: 150px;
+        width: 160px;
+        height: 33px;
+        background: logs-touch.has-hover ? #F1F3F5 : white;
+        border-width: 1px;
+        border-color: #E4E7EB;
+        border-radius: 6px;
+
+        logs-touch := TouchArea {
+            clicked => {
+                root.general-page-open-logs();
+            }
+        }
+
+        // Centred by hand: the text is a sibling of the touch area, not a layout
+        // child, so it does not stretch.
+        Text {
+            text: root.open-logs-text;
+            font-size: 15px;
+            color: #1F2328;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+}

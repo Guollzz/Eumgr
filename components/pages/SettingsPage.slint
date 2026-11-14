@@ -1,0 +1,204 @@
+// Settings page: a two column layout.
+//
+//   left   : sidebar with the settings categories (general, about)
+//   right  : the page of the selected category
+//
+// Both columns are separate white cards on the operation area card, each with
+// its own 1px border and soft shadow. The geometry (5px margin, 200px sidebar,
+// 5px gap, 975px content) is part of the design and must stay as it is.
+
+import { ScrollView } from "std-widgets.slint";
+import { AboutPage } from "AboutPage.slint";
+import { GeneralPage } from "GeneralPage.slint";
+
+export component SettingsPage inherits Rectangle {
+    background: transparent;
+    height: 630px;
+    width: 1190px;
+
+    // Bubbles the language selection of the general page up to MainWindow,
+    // which forwards it to the Rust side (persisting it and re-applying texts).
+    callback general-page-language(string);
+
+    // Bubbles the "open log folder" click of the general page up to MainWindow.
+    callback general-page-open-logs();
+
+    // Reports user actions ("settings.page.about", ...) to MainWindow, which
+    // forwards them to the shared LogBridge. A page cannot use the global
+    // directly because that would create a circular import.
+    callback log-event(string);
+
+    // Emitted when the user selects another category. MainWindow stores the
+    // new index (so it survives a restart) and feeds it back through
+    // `setting-interface-page`, which keeps a single source of truth.
+    callback settings-page-changed(int);
+
+    // Localised texts, injected by the Rust side.
+    in-out property <string> general: "general";
+    in-out property <string> about: "about";
+    in-out property <string> version: "?";
+    in-out property <string> language: "language";
+    in-out property <string> current-language: "zh-CN";
+    // Label of the "open log folder" button of the general page.
+    // Section label of the log block, forwarded to GeneralPage.
+    in property <string> logs: "logs";
+    in property <string> open-logs-text: "open-logs";
+
+    // Selected category: 0 = general, 1 = about. Owned by MainWindow so that
+    // the selection can be restored from the configuration file.
+    in property <int> setting-interface-page: 0;
+
+    // Sidebar card. The ScrollView inside is kept for future categories; it
+    // already wraps the row list so adding rows does not change the layout.
+    Rectangle {
+        x: 5px;
+        y: 5px;
+        height: 620px;
+        width: 200px;
+        background: #FFFFFF;
+        border-width: 1px;
+        border-color: #E4E7EB;
+        border-radius: 10px;
+        drop-shadow-color: rgba(0, 0, 0, 0.16);
+        drop-shadow-blur: 16px;
+        drop-shadow-offset-y: 3px;
+
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 36px;
+
+            ScrollView {
+                height: 584px;
+                width: 200px;
+
+                // y offset of every row inside the scroll view; the highlight
+                // references the same numbers so it can never drift.
+                private property <length> general-button-y: 0px;
+                private property <length> about-button-y: 50px;
+
+                // y offset the highlight is at. Derived from the selected
+                // category instead of being stored on click: a stored pixel
+                // offset would stay behind when the selection is restored from
+                // the configuration file after a restart.
+                private property <length> highlight-y:
+                    setting-interface-page == 0 ? general-button-y : about-button-y;
+
+                Rectangle {  // Sliding highlight shell (inset by 4px/2px).
+                    x: 4px;
+                    width: 192px;
+                    height: 46px;
+                    background: #E7EAEE;
+                    border-radius: 6px;
+                    drop-shadow-color: rgba(0, 0, 0, 0.12);
+                    drop-shadow-blur: 8px;
+                    drop-shadow-offset-y: 3px;
+                    y: highlight-y + 2px;
+
+                    animate y {
+                        duration: 300ms;
+                        easing: spring(0.35);
+                    }
+                }
+
+                // General row.
+                Rectangle {
+                    y: general-button-y;
+                    width: 200px;
+                    height: 50px;
+                    background: transparent;
+
+                    Rectangle {  // Hover fill, hidden while the row is active.
+                        x: 4px;
+                        y: 2px;
+                        width: 192px;
+                        height: 46px;
+                        background: #E6E9ED;
+                        border-radius: 6px;
+                        visible: general_button.has-hover && setting-interface-page != 0;
+                    }
+
+                    Text {
+                        text: general;
+                        color: setting-interface-page == 0 ? #1F2328 : #57606A;
+                        font-size: 20px;
+                    }
+
+                    general_button := TouchArea {
+                        clicked => {
+                            root.settings-page-changed(0);
+                            root.log-event("settings.page.general");
+                        }
+                    }
+                }
+
+                // About row.
+                Rectangle {
+                    y: about-button-y;
+                    width: 200px;
+                    height: 50px;
+                    background: transparent;
+
+                    Rectangle {  // Hover fill, hidden while the row is active.
+                        x: 4px;
+                        y: 2px;
+                        width: 192px;
+                        height: 46px;
+                        background: #E6E9ED;
+                        border-radius: 6px;
+                        visible: about_button.has-hover && setting-interface-page != 1;
+                    }
+
+                    Text {
+                        text: about;
+                        color: setting-interface-page == 1 ? #1F2328 : #57606A;
+                        font-size: 20px;
+                    }
+
+                    about_button := TouchArea {
+                        clicked => {
+                            root.settings-page-changed(1);
+                            root.log-event("settings.page.about");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Content card: renders the page that belongs to the selected category.
+    Rectangle {
+        x: 210px;
+        y: 5px;
+        height: 620px;
+        width: 975px;
+        background: #FFFFFF;
+        border-width: 1px;
+        border-color: #E4E7EB;
+        border-radius: 10px;
+        drop-shadow-color: rgba(0, 0, 0, 0.16);
+        drop-shadow-blur: 16px;
+        drop-shadow-offset-y: 3px;
+
+        // Pages are created lazily, only the visible one exists.
+        if setting-interface-page == 0 : GeneralPage {
+            language: language;
+            lang: current-language;
+            logs: root.logs;
+            open-logs-text: open-logs-text;
+
+            general-page-language-combo-selected(value) => {
+                general-page-language(value)
+            }
+
+            // Forwarded to MainWindow, which asks the Rust side to open the
+            // folder that holds the log files.
+            general-page-open-logs() => {
+                root.general-page-open-logs();
+            }
+        }
+
+        if setting-interface-page == 1 : AboutPage {
+            version: version;
+        }
+    }
+}

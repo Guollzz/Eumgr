@@ -1,0 +1,68 @@
+// About page: application icon, version and the licence notice.
+//
+// The vertical position of the two notice lines (y = 260px and y = 275px) is
+// part of the design; they are two separate HorizontalLayouts because the
+// version block above them is a layout of its own and the two texts must stay
+// on fixed design coordinates.
+
+export component AboutPage inherits Rectangle {
+    background: transparent;
+    height: 620px;
+    width: 975px;
+
+    // Version string, injected by the Rust side (see `VERSION` in lib.rs).
+    in-out property <string> version: "?";
+
+    // Icon + version, centered in the upper half of the page.
+    HorizontalLayout {
+        alignment: center;
+
+        VerticalLayout {
+            alignment: center;
+
+            Image {
+                source: @image-url("../../assets/icon/icon.png");
+                width: 100px;
+                height: 100px;
+            }
+
+            Text {
+                // "@tr" lets Slint translate the template while keeping the
+                // version number as a parameter.
+                text: @tr("Eumgr {}", version);
+                color: #1F2328;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                font-size: 20px;
+            }
+        }
+    }
+
+    // Copyright notice.
+    HorizontalLayout {
+        y: 260px;
+        alignment: center;
+
+        Text {
+            text: "Copyright © 2026 Eunjon\n";
+            color: #57606A;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            font-size: 20px;
+        }
+    }
+
+    // Licence notice.
+    HorizontalLayout {
+        y: 275px;
+        alignment: center;
+
+        Text {
+            text: "Licensed under the GNU Affero General Public License v3.0";
+            color: #57606A;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            font-size: 20px;
+        }
+    }
+}

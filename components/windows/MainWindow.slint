@@ -1,0 +1,886 @@
+// Main window of Eumgr.
+//
+// Visual structure, from top to bottom (all positions are part of the design,
+// do not move them without a design decision):
+//   1. Title bar at y = 0..35px, sharing the row with the page switch: the
+//      "Eumgr" caption on the left, the close and minimize buttons on the right.
+//      The window has no native frame, so this row is also the drag handle.
+//   2. Title divider at y = 35px.
+//   3. Page switch: a capsule track with three segments (workspace, launchpad,
+//      settings) and a highlight that slides to the active segment.
+//   4. Dynamic island: a capsule chip showing the clock or a notice. It is
+//      declared last so it can grow over the operation area when it expands.
+//   5. Operation area: the 1190x630 card that hosts the active page.
+//
+// The texts are injected from the locale files by the Rust side, see
+// src/windows/main_window.rs.
+
+import { WorkspacePage } from "../pages/WorkspacePage.slint";
+import { LaunchpadPage } from "../pages/LaunchpadPage.slint";
+import { SettingsPage } from "../pages/SettingsPage.slint";
+import { Palette } from "std-widgets.slint";
+
+// Callbacks that the Rust side registers directly on the window (they do not
+// come from one of the pages and therefore cannot live in a page component).
+export global CallbackBridge {
+    // Emitted after the user picked another language in the language combo box.
+    // The payload is the new language code, for example "en" or "zh-CN".
+    callback general-page-language-selected(string);
+    // Emitted when the user asks for the folder that holds the log files.
+    callback general-page-open-logs();
+}
+
+// Commands of the custom title bar. The window has no native frame, so moving,
+// minimising and closing it are done by the Rust side (src/windows/
+// window_controls.rs) and only triggered from here.
+export global WindowBridge {
+    // The user pressed the title bar and holds the button: start dragging.
+    callback start-drag();
+    // The green button was clicked.
+    callback minimize();
+    // The red button was clicked.
+    callback close();
+}
+
+// Channel for "the user did something" events. The Rust side writes one line
+// into the log file per call, which makes user visible actions traceable while
+// debugging.
+//
+// The pages cannot reach this global themselves (they are imported by this
+// file, so importing it back would be circular): they expose a `log-event`
+// callback which is forwarded here, see the SettingsPage instantiation below.
+export global LogBridge {
+    // Short machine readable event name, for example "page.switch.launchpad".
+    callback log(string);
+}
+
+// Actions of the launchpad. They are collected in one global because the Rust
+// side registers exactly one handler per callback, and the page itself only
+// knows its own callback names.
+export global LaunchpadBridge {
+    // Starts the tile at this index.
+    callback launch(int);
+    // Removes the tile at this index (also drops it from the continuous list).
+    callback remove(int);
+    // Opens the "add files" picker.
+    callback add-items();
+    // Opens the "add folder" picker.
+    callback add-folder();
+    // Adds/removes the tile at this index to/from the continuous launch list.
+    callback toggle-continuous(int);
+    // Starts every tile of the continuous launch list.
+    callback run-continuous();
+}
+
+// Navigation that has to survive a restart. The Rust side writes it into
+// `config.json`; the values come back through the window properties, so the
+// window stays the single source of truth while it is open.
+export global NavigationBridge {
+    // Operation area page: 0 = workspace, 1 = launchpad, 2 = settings.
+    callback page-changed(int);
+    // Selected row of the settings page: 0 = general, 1 = about.
+    callback settings-page-changed(int);
+}
+
+// Workspace page actions. The page itself never touches the filesystem: every
+// button only reports what the user asked for, the Rust side does the work and
+// writes the outcome back into the window properties.
+export global WorkspaceBridge {
+    // Opens the picker for the working directory.
+    callback choose-directory();
+    // Expands or collapses a folder row of the file tree.
+    callback toggle-dir(string);
+    // Stages files, a folder, or clears the staged list.
+    callback add-files();
+    callback add-folder();
+    callback clear-added();
+    // Creates a project folder from the project name and the template.
+    callback create-project();
+    // Chooses the project template folder, or resets to the built-in one.
+    callback template-folder();
+    callback template-default();
+    // Rule editing: add, switch kind, edit the value, choose the target folder,
+    // remove.
+    callback add-rule();
+    callback rule-kind-chosen(int, string);
+    callback rule-value-edited(int, string);
+    callback rule-target(int);
+    // The fallback rule: where files that match no rule are copied to.
+    callback other-choose();
+    callback other-clear();
+    callback rule-removed(int);
+    // Copies every staged path according to the rules.
+    callback process();
+}
+
+// One segment of the page switch: a capsule cell, 75px wide by design.
+//
+// The parent decides *where* it is (`x`) and *whether it is the active segment*
+// (`selected`); the highlight shell behind it is drawn by the track, so a
+// selected segment keeps a transparent background.
+component SwitchSegment inherits Rectangle {
+    // Text shown inside the segment (already localised by the caller).
+    in property <string> label;
+    // True when this segment is the active page.
+    in property <bool> selected;
+    // Emitted on click; the parent moves the highlight and changes the page.
+    callback activated;
+
+    // Horizontal padding around the label inside its cell.
+    private property <length> label-padding: 5px;
+
+    // 75px is the design width; it is also the minimum, so the Chinese labels
+    // (about 45px wide) keep the exact design geometry. Longer translations,
+    // for example "Workspace", grow their cell instead of being clipped.
+    width: max(75px, segment-label.width + 2 * label-padding);
+    height: 25px;
+    border-radius: 12.5px;
+    // Only a hovered *and* inactive segment paints its own background, the
+    // active one is already covered by the sliding highlight shell.
+    background: selected ? transparent : (segment-touch.has-hover ? #E6E9ED : transparent);
+
+    // Centred by hand: giving the text `width: parent.width` would make the
+    // cell width and the text width depend on each other (binding loop).
+    segment-label := Text {
+        text: root.label;
+        // Active text is darker than inactive text; the glass fill alone is not
+        // enough contrast on some screens.
+        color: root.selected ? #1F2328 : #57606A;
+        font-size: 15px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    segment-touch := TouchArea {
+        clicked => {
+            root.activated();
+        }
+    }
+}
+
+// One button of the custom title bar (close / minimize).
+//
+// macOS style: a small solid circle in a muted red or green. The symbol inside
+// stays invisible until the mouse hovers the button, then it fades in black, so
+// the bar stays calm while the two colours still make the buttons findable.
+component HeaderButton inherits Rectangle {
+    // `true` draws a cross (close), `false` a dash (minimize).
+    //
+    // The glyphs are paths instead of text glyphs: a "×" character sits on the
+    // baseline of its line box, so centring the Text element still leaves the
+    // cross a pixel or two too high inside a 12px circle. Paths are drawn in the
+    // exact coordinates below, are resolution independent and need no font.
+    in property <bool> cross: true;
+    // Whether the glyph is visible. Driven from the title bar, not from this
+    // button's own hover state, because macOS shows the symbol of *both* buttons
+    // as soon as the mouse is over either of them.
+    in property <bool> show-glyph: false;
+    // Fill colour of the button: red for close, green for minimize.
+    in property <color> accent;
+    // Emitted when the user clicks the button.
+    callback activated;
+    // Exposed so the title bar can combine the hover state of both buttons.
+    out property <bool> hovered: button-touch.has-hover;
+
+    // 12px diameter: the size of a macOS traffic light, small enough to read as
+    // a detail of the title bar instead of a toolbar button.
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    background: accent;
+
+    // Cross of the close button, centred in the 12x12 box (3.5px inset keeps the
+    // stroke inside the circle).
+    //
+    // The viewbox is forced to 12x12: a Path normally scales its own bounding box
+    // (here 5x5) up to the element size, which blew the small cross up until it
+    // filled the whole circle. With a 12x12 viewbox the commands below map 1:1
+    // onto the button.
+    cross-glyph := Path {
+        visible: root.cross;
+        width: 12px;
+        height: 12px;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        commands: "M 3.5 3.5 L 8.5 8.5 M 8.5 3.5 L 3.5 8.5";
+        stroke: #000000;
+        stroke-width: 1.2px;
+        // Hidden until hover: at rest the bar only shows two coloured dots.
+        opacity: root.show-glyph ? 1.0 : 0.0;
+
+        animate opacity {
+            duration: 120ms;
+            easing: ease-out;
+        }
+    }
+
+    // Dash of the minimize button, on the exact vertical centre of the circle.
+    dash-glyph := Path {
+        visible: !root.cross;
+        width: 12px;
+        height: 12px;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        commands: "M 3.5 6 L 8.5 6";
+        stroke: #000000;
+        stroke-width: 1.2px;
+        opacity: root.show-glyph ? 1.0 : 0.0;
+
+        animate opacity {
+            duration: 120ms;
+            easing: ease-out;
+        }
+    }
+
+    button-touch := TouchArea {
+        clicked => {
+            root.activated();
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    // Window chrome: the frame is drawn by this file (custom title bar), so the
+    // native one is switched off. The size stays fixed at the design size.
+    title: "Eumgr";
+    icon: @image-url("../../assets/icon/icon.png");
+    width: 1200px;
+    height: 710px;
+    no-frame: true;
+    background: white;
+
+    // Force the standard widgets (ComboBox, ScrollView, ...) onto the light
+    // colour scheme, otherwise they follow the OS dark theme and look disabled
+    // on this light UI. This must stay an imperative assignment: as a property
+    // binding (`Palette.color-scheme: ColorScheme.light;`) it does not compile.
+    init => {
+        Palette.color-scheme = ColorScheme.light;
+    }
+
+    // Texts injected from the locale files (see main_window.rs).
+    in-out property <string> dynamic-island-text: "dynamic-island-text";
+    // True while the text in the island belongs to a *failed* action, which is
+    // drawn in red instead of black. The Rust side sets it together with the
+    // text (see src/windows/dynamic_island.rs).
+    in-out property <bool> island-error: false;
+    // Caption of the custom title bar. Not localised on purpose: the product
+    // name is the same in every language.
+    in-out property <string> window-title-text: "Eumgr";
+    in-out property <string> workspace: "workspace";
+    in-out property <string> launchpad: "launchpad";
+    in-out property <string> settings: "settings";
+    in-out property <string> general: "general";
+    in-out property <string> about: "about";
+    in-out property <string> version: "?";
+    in-out property <string> language: "language";
+    // Language code currently in use, used by the combo box to preselect a row.
+    in-out property <string> current-language: "zh-CN";
+
+    // Active page of the operation area:
+    //   0 = workspace, 1 = launchpad, 2 = settings.
+    // The Rust side restores this from `config.json` before the window is shown
+    // and every page switch stores it again, so the switch below derives from
+    // it instead of keeping a second copy.
+    in-out property <int> operation-area-page: 0;
+
+    // Which pages currently exist. The active page is always alive; the one
+    // that is sliding out stays alive until the animation ends, then Rust drops
+    // it so at most two pages are ever in memory at the same time.
+    in-out property <bool> page-alive-workspace: false;
+    in-out property <bool> page-alive-launchpad: false;
+    in-out property <bool> page-alive-settings: false;
+
+    // Selected row of the settings page (0 = general, 1 = about), restored the
+    // same way.
+    in-out property <int> settings-page: 0;
+
+    // Launchpad content, pushed by the Rust side after every change.
+    in-out property <[string]> launchpad-item-names;
+    in-out property <[string]> launchpad-item-letters;
+    in-out property <[bool]> launchpad-item-continuous;
+    // Grid rows needed for the tiles plus the "+" tile. The Rust side computes
+    // it because Slint has no integer division to round up with.
+    in-out property <int> launchpad-row-count: 1;
+    // Text of the box that shows what a continuous launch would start.
+    in-out property <string> launchpad-summary: "";
+
+    // Localised launchpad texts.
+    in-out property <string> launchpad-add-hint: "";
+    in-out property <string> launchpad-run: "";
+    in-out property <string> launchpad-select: "";
+    in-out property <string> launchpad-selection-title: "";
+    in-out property <string> launchpad-done: "";
+    // Entries of the tile context menu (open / remove).
+    in-out property <string> launchpad-menu-open: "";
+    in-out property <string> launchpad-menu-remove: "";
+
+    // Localised label of the "open log folder" button in the general settings.
+    in-out property <string> open-logs-text: "open-logs";
+    // Section label of the log block of the general settings page.
+    in-out property <string> logs-text: "logs";
+
+    // ---------- workspace page ----------
+    // Absolute path of the working directory whose tree is shown.
+    in-out property <string> workspace-directory: "";
+    // The file tree, one row per index (Slint cannot hand a struct to Rust).
+    in-out property <[int]> workspace-tree-depths;
+    in-out property <[string]> workspace-tree-names;
+    in-out property <[string]> workspace-tree-paths;
+    in-out property <[bool]> workspace-tree-is-dirs;
+    in-out property <[bool]> workspace-tree-expanded;
+    in-out property <[bool]> workspace-tree-has-children;
+    // Paths staged for the classifier, shown below the tree.
+    in-out property <[string]> workspace-added;
+    // Name typed into the project field.
+    in-out property <string> workspace-project-name: "";
+    // Template currently used for a new project (path or "内置模板").
+    in-out property <string> workspace-template-current: "";
+    // Classification rules as three parallel arrays.
+    in-out property <[string]> workspace-rule-kinds;
+    in-out property <[string]> workspace-rule-values;
+    in-out property <[string]> workspace-rule-targets;
+    // Result line under the "开始处理" button.
+    in-out property <string> workspace-result: "";
+    in-out property <bool> workspace-result-error: false;
+
+    // Localised workspace texts.
+    in-out property <string> workspace-set-directory: "";
+    in-out property <string> workspace-tree-label: "";
+    in-out property <string> workspace-tree-empty: "";
+    in-out property <string> workspace-directory-placeholder: "";
+    in-out property <string> workspace-directory-caption: "";
+    in-out property <string> workspace-project-caption: "";
+    in-out property <string> workspace-add-label: "";
+    in-out property <string> workspace-add-hint: "";
+    in-out property <string> workspace-add-files: "";
+    in-out property <string> workspace-add-folder: "";
+    in-out property <string> workspace-clear: "";
+    in-out property <string> workspace-added-empty: "";
+    in-out property <string> workspace-project-placeholder: "";
+    in-out property <string> workspace-add-project: "";
+    in-out property <string> workspace-template-label: "";
+    in-out property <string> workspace-import-folder: "";
+    in-out property <string> workspace-kind-ext: "";
+    in-out property <string> workspace-kind-keyword: "";
+    in-out property <string> workspace-other-label: "";
+    in-out property <string> workspace-other-hint: "";
+    in-out property <string> workspace-other-clear: "";
+    in-out property <string> workspace-other-target: "";
+    in-out property <string> workspace-value-ext: "";
+    in-out property <string> workspace-value-keyword: "";
+    in-out property <string> workspace-default-template: "";
+    in-out property <string> workspace-rules-label: "";
+    in-out property <string> workspace-add-rule: "";
+    in-out property <string> workspace-rules-hint: "";
+    in-out property <string> workspace-rules-empty: "";
+    in-out property <string> workspace-rule-choose: "";
+    in-out property <string> workspace-rule-remove: "";
+    in-out property <string> workspace-rule-target-placeholder: "";
+    in-out property <string> workspace-process: "";
+
+    // Custom title bar: shares the row of the page switch (y = 0..35px).
+    // Declared before the switch and the operation area, so those win the hit
+    // test wherever they overlap this bar.
+    Rectangle {
+        // Explicit y: a child of the window without one is placed by the
+        // implicit layout of the root element (which centred this bar), and the
+        // title bar must start at the very top edge.
+        y: 0px;
+        width: parent.width;
+        height: 35px;
+        background: transparent;
+
+        // Drag handle. Slint cannot move the window itself, so the press is
+        // handed to the system move loop through WindowBridge (see
+        // src/windows/window_controls.rs). The page switch is declared later,
+        // i.e. above this area, so clicking a segment still switches pages.
+        title-drag := TouchArea {
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    WindowBridge.start-drag();
+                }
+            }
+        }
+
+        // Product name on the left.
+        Text {
+            x: 16px;
+            y: (parent.height - self.height) / 2;
+            text: root.window-title-text;
+            font-size: 15px;
+            color: #57606A;
+        }
+
+        // Window buttons on the right, macOS order: minimize (green) first, then
+        // close (red) as the outermost one. They are placed by hand instead of in
+        // a layout so both are exactly centred in the 35px bar and neither of them
+        // touches the top edge of the window.
+        //
+        // `traffic-hovered` merges the hover state of both buttons so that the
+        // symbols of *both* appear as soon as the mouse is over either of them,
+        // exactly like the macOS traffic lights.
+        close-button := HeaderButton {
+            x: parent.width - 16px - self.width;
+            y: (parent.height - self.height) / 2;
+            cross: true;
+            show-glyph: traffic-hovered;
+            accent: #FF6259;
+
+            activated => {
+                WindowBridge.close();
+            }
+        }
+
+        minimize-button := HeaderButton {
+            x: close-button.x - 8px - self.width;
+            y: (parent.height - self.height) / 2;
+            cross: false;
+            show-glyph: traffic-hovered;
+            accent: #34C759;
+
+            activated => {
+                WindowBridge.minimize();
+            }
+        }
+
+        // True while the mouse is over either traffic light. Declared after the
+        // two buttons because it merges their public `hovered` properties.
+        private property <bool> traffic-hovered: close-button.hovered || minimize-button.hovered;
+    }
+
+    Rectangle {  // Horizontal divider under the title bar.
+        y: 35px;
+        width: 1175px;
+        height: 1px;
+        background: #E4E7EB;
+    }
+
+    // Page switch (segmented capsule).
+    Rectangle {
+        // Explicit geometry: a window child without one is placed by the
+        // implicit layout of the root element, and this bar has to span the full
+        // width so its contents can be centred.
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: 35px;
+
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 5px;
+
+            Rectangle {  // Track: three capsule cells separated by 5px gaps.
+                // The track is exactly as wide as its cells; in Chinese that is
+                // 75 + 5 + 75 + 5 + 75 = 235px, so the design width is kept.
+                width: workspace_segment.width + segment-gap + launchpad_segment.width + segment-gap + settings_segment.width;
+                height: 25px;
+                background: #F1F3F5;
+                border-radius: 12.5px;
+                drop-shadow-color: rgba(0, 0, 0, 0.12);
+                drop-shadow-blur: 8px;
+                drop-shadow-offset-y: 3px;
+
+                // Empty space between two cells.
+                private property <length> segment-gap: 5px;
+
+                // x offset of every segment inside the track. Derived from the
+                // cell widths so the highlight and the segments cannot drift
+                // apart when a translation is longer than 75px.
+                private property <length> workspace-button-x: 0px;
+                private property <length> launchpad-button-x: workspace_segment.width + segment-gap;
+                private property <length> settings-button-x: launchpad-button-x + launchpad_segment.width + segment-gap;
+
+                // Page index of the active segment (0 = workspace, 1 = launchpad,
+                // 2 = settings). It is derived from the window property, which is
+                // the single source of truth: the text colours, the highlight
+                // position and the visible page all follow it, including after a
+                // restart that restores the stored page.
+                private property <int> active-segment: root.operation-area-page;
+
+                // Left edge of the highlight: the x of the active cell. Bound,
+                // not stored, so it follows the cells when their widths change.
+                private property <length> highlight-x:
+                    active-segment == 0 ? workspace-button-x
+                    : active-segment == 1 ? launchpad-button-x
+                    : settings-button-x;
+
+                Rectangle {  // Sliding highlight shell (glass fill).
+                    x: highlight-x;
+                    // The shell always matches the width of the active cell.
+                    width: active-segment == 0 ? workspace_segment.width
+                        : active-segment == 1 ? launchpad_segment.width
+                        : settings_segment.width;
+                    height: 25px;
+                    background: #DFE3E8;
+                    border-radius: 12.5px;
+                    drop-shadow-color: rgba(0, 0, 0, 0.12);
+                    drop-shadow-blur: 8px;
+                    drop-shadow-offset-y: 3px;
+
+                    animate x {
+                        duration: 300ms;
+                        easing: spring(0.4);
+                    }
+
+                    animate width {
+                        duration: 300ms;
+                        easing: spring(0.4);
+                    }
+                }
+
+                // Workspace segment.
+                workspace_segment := SwitchSegment {
+                    x: workspace-button-x;
+                    label: root.workspace;
+                    selected: active-segment == 0;
+
+                    activated => {
+                        root.operation-area-page = 0;
+                        NavigationBridge.page-changed(0);
+                        LogBridge.log("page.switch.workspace");
+                    }
+                }
+
+                // Launchpad segment.
+                launchpad_segment := SwitchSegment {
+                    x: launchpad-button-x;
+                    label: root.launchpad;
+                    selected: active-segment == 1;
+
+                    activated => {
+                        root.operation-area-page = 1;
+                        NavigationBridge.page-changed(1);
+                        LogBridge.log("page.switch.launchpad");
+                    }
+                }
+
+                // Settings segment.
+                settings_segment := SwitchSegment {
+                    x: settings-button-x;
+                    label: root.settings;
+                    selected: active-segment == 2;
+
+                    activated => {
+                        root.operation-area-page = 2;
+                        NavigationBridge.page-changed(2);
+                        LogBridge.log("page.switch.settings");
+                    }
+                }
+            }
+        }
+    }
+
+    // Dynamic island lives at the end of this file, after the operation area, so
+    // it can grow over the card while it is expanded.
+
+    // Operation area: the card that hosts the active page.
+    Rectangle {
+        // Explicit geometry, otherwise the implicit layout of the root element
+        // would size this container to its content and shift the card.
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+
+        HorizontalLayout {
+            // Explicit position: (1200 - 1190) / 2 for the horizontal centring and
+            // 72px (card top) - 35px (padding below) for the vertical one.
+            x: 5px;
+            y: 37px;
+            alignment: center;
+            padding-top: 35px;
+            width: 1190px;
+            height: 630px;
+
+            Rectangle {
+                width: parent.width;
+                height: parent.height;
+                background: #F5F6F8;
+                border-width: 1px;
+                border-color: #E4E7EB;
+                border-radius: 12px;
+                drop-shadow-color: rgba(0, 0, 0, 0.16);
+                drop-shadow-blur: 16px;
+                drop-shadow-offset-y: 3px;
+                // The sliding strip is wider than the card, so everything that
+                // is not the active page has to be cut off here.
+                clip: true;
+
+                // The three pages live side by side in a strip that slides
+                // horizontally: switching a tab moves the whole strip, so the
+                // new page comes in from the side instead of popping in.
+                // The strip is wider than the card, and the card clips it.
+                page-strip := Rectangle {
+                    // Clamped so a stored/restored page index outside the three
+                    // pages can never show an empty card.
+                    x: -(root.operation-area-page * 1190px);
+                    y: 0px;
+                    width: 3570px;
+                    height: 630px;
+                    background: transparent;
+
+                    // Same duration and curve as the tab highlight above, so the
+                    // highlight and the page move together.
+                    animate x {
+                        duration: 300ms;
+                        easing: spring(0.12);
+                    }
+
+                    if root.page-alive-workspace : WorkspacePage {
+                        x: 0px;
+                    directory: root.workspace-directory;
+                    directory-placeholder: root.workspace-directory-placeholder;
+                    directory-caption: root.workspace-directory-caption;
+                    set-directory-text: root.workspace-set-directory;
+                    tree-depths: root.workspace-tree-depths;
+                    tree-names: root.workspace-tree-names;
+                    tree-paths: root.workspace-tree-paths;
+                    tree-is-dirs: root.workspace-tree-is-dirs;
+                    tree-expanded: root.workspace-tree-expanded;
+                    tree-has-children: root.workspace-tree-has-children;
+                    tree-label: root.workspace-tree-label;
+                    tree-empty-text: root.workspace-tree-empty;
+                    added-names: root.workspace-added;
+                    added-empty-text: root.workspace-added-empty;
+                    add-label: root.workspace-add-label;
+                    add-hint-text: root.workspace-add-hint;
+                    add-files-text: root.workspace-add-files;
+                    add-folder-text: root.workspace-add-folder;
+                    clear-text: root.workspace-clear;
+                    project-name <=> root.workspace-project-name;
+                    project-name-placeholder: root.workspace-project-placeholder;
+                    project-caption: root.workspace-project-caption;
+                    add-project-text: root.workspace-add-project;
+                    template-label: root.workspace-template-label;
+                    template-current: root.workspace-template-current;
+                    import-folder-text: root.workspace-import-folder;
+                    kind-ext-text: root.workspace-kind-ext;
+                kind-keyword-text: root.workspace-kind-keyword;
+                other-label: root.workspace-other-label;
+                other-hint: root.workspace-other-hint;
+                other-clear-text: root.workspace-other-clear;
+                other-target: root.workspace-other-target;
+                value-ext-placeholder: root.workspace-value-ext;
+                value-keyword-placeholder: root.workspace-value-keyword;
+                    default-template-text: root.workspace-default-template;
+                    rules-label: root.workspace-rules-label;
+                    add-rule-text: root.workspace-add-rule;
+                    rules-hint: root.workspace-rules-hint;
+                    rules-empty-text: root.workspace-rules-empty;
+                    rule-target-placeholder: root.workspace-rule-target-placeholder;
+                    rule-kinds: root.workspace-rule-kinds;
+                    rule-values: root.workspace-rule-values;
+                    rule-targets: root.workspace-rule-targets;
+                    rule-choose-text: root.workspace-rule-choose;
+                    rule-remove-text: root.workspace-rule-remove;
+                    process-text: root.workspace-process;
+                    result-text: root.workspace-result;
+                    result-error: root.workspace-result-error;
+
+                    choose-directory => { WorkspaceBridge.choose-directory(); }
+                    toggle-dir(path) => { WorkspaceBridge.toggle-dir(path); }
+                    add-files => { WorkspaceBridge.add-files(); }
+                    add-folder => { WorkspaceBridge.add-folder(); }
+                    clear-added => { WorkspaceBridge.clear-added(); }
+                    create-project => { WorkspaceBridge.create-project(); }
+                    template-folder => { WorkspaceBridge.template-folder(); }
+                    other-choose => { WorkspaceBridge.other-choose(); }
+                other-clear => { WorkspaceBridge.other-clear(); }
+                    template-default => { WorkspaceBridge.template-default(); }
+                    add-rule => { WorkspaceBridge.add-rule(); }
+                    rule-kind-chosen(index, kind) => { WorkspaceBridge.rule-kind-chosen(index, kind); }
+                    rule-value-edited(index, value) => { WorkspaceBridge.rule-value-edited(index, value); }
+                    rule-target(index) => { WorkspaceBridge.rule-target(index); }
+                    rule-removed(index) => { WorkspaceBridge.rule-removed(index); }
+                    process => { WorkspaceBridge.process(); }
+                }
+
+                if root.page-alive-launchpad : LaunchpadPage {
+                    x: 1190px;
+                    item-names: root.launchpad-item-names;
+                    item-letters: root.launchpad-item-letters;
+                    item-continuous: root.launchpad-item-continuous;
+                    row-count: root.launchpad-row-count;
+                    summary-text: root.launchpad-summary;
+                    add-hint: root.launchpad-add-hint;
+                    run-text: root.launchpad-run;
+                    select-text: root.launchpad-select;
+                    selection-title: root.launchpad-selection-title;
+                    done-text: root.launchpad-done;
+                    menu-open-text: root.launchpad-menu-open;
+                    menu-remove-text: root.launchpad-menu-remove;
+
+                    // Forward every launchpad action to the Rust side.
+                    launch-item(index) => {
+                        LaunchpadBridge.launch(index);
+                    }
+                    remove-item(index) => {
+                        LaunchpadBridge.remove(index);
+                    }
+                    add-items() => {
+                        LaunchpadBridge.add-items();
+                    }
+                    add-folder() => {
+                        LaunchpadBridge.add-folder();
+                    }
+                    toggle-continuous(index) => {
+                        LaunchpadBridge.toggle-continuous(index);
+                    }
+                    run-continuous() => {
+                        LaunchpadBridge.run-continuous();
+                    }
+                }
+
+                if root.page-alive-settings : SettingsPage {
+                    x: 2380px;
+                    general: general;
+                    about: about;
+                    version: version;
+                    language: language;
+                    current-language: current-language;
+                    logs: root.logs-text;
+                    open-logs-text: root.open-logs-text;
+
+                    // The selected category is owned by the window so it can be
+                    // stored in the configuration file and restored on start-up.
+                    setting-interface-page: root.settings-page;
+
+                    settings-page-changed(index) => {
+                        root.settings-page = index;
+                        NavigationBridge.settings-page-changed(index);
+                    }
+
+                    // Forward the page's own log events into the global bridge.
+                    log-event(event) => {
+                        LogBridge.log(event);
+                    }
+
+                    // Forward the language selection up to the Rust side, which
+                    // persists it and re-applies all texts.
+                    general-page-language(value) => {
+                        CallbackBridge.general-page-language-selected(value);
+                    }
+
+                    // "Open log folder" button of the general settings page.
+                    general-page-open-logs() => {
+                        CallbackBridge.general-page-open-logs();
+                    }
+                }
+                }
+            }
+        }
+    }
+
+    // Dynamic island: a capsule chip that shows the clock, or a notice while one
+    // is pending (see src/windows/dynamic_island.rs). Declared last so it paints
+    // above the operation area while it is expanded.
+    Rectangle {
+        y: 40px;
+        width: parent.width;
+        height: 30px;  // Row height; the chip itself may become taller.
+        background: transparent;
+
+        // Invisible copy of the text, used only to measure the intrinsic width of
+        // the notice. Measuring with the visible label would bind the chip width
+        // to a width that again depends on the chip (a binding loop).
+        island-measure := Text {
+            x: -4000px;
+            text: root.dynamic-island-text;
+            font-size: 20px;
+        }
+
+        // Second invisible copy, wrapped at the final inner width of the widest
+        // capsule. The expanded height is derived from this one instead of from
+        // the visible label: the visible label wraps at the animating width, so
+        // its preferred height keeps changing during the resize and the height
+        // animation would only start once the width has settled. With a fixed
+        // measuring width the height target is constant, so both axes move
+        // together and finish together.
+        island-measure-wrapped := Text {
+            x: -4000px;
+            width: 340px;  // 360px capsule minus the 10px padding on both sides.
+            text: root.dynamic-island-text;
+            font-size: 20px;
+            wrap: word-wrap;
+        }
+
+        // True only when the notice does not fit into the widest capsule, i.e.
+        // when it is elided in the collapsed state. Short texts (the clock, a
+        // "started" notice) never expand, so hovering them changes nothing.
+        private property <bool> island-overflows: island-measure.width + 20px > 360px;
+
+        // The capsule only opens downwards, and only for text that is truncated.
+        private property <bool> island-expanded: island-touch.has-hover && island-overflows;
+
+        // The chip: a capsule that grows and shrinks with its text and expands
+        // vertically while the mouse hovers it.
+        island-chip := Rectangle {
+            x: (parent.width - self.width) / 2;
+            // Pinned to the top of its row so the expansion only adds height at
+            // the bottom; the title row above it never moves.
+            y: 0px;
+            // At most 360px wide: a longer notice is elided with an ellipsis and
+            // becomes readable through the hover expansion.
+            width: min(360px, island-measure.width + 20px);
+            // The expanded height follows the wrapped text instead of being a
+            // fixed box, so a two line notice and a ten line notice both end up
+            // exactly as tall as they need to be. 320px is the hard ceiling; a
+            // text longer than that is clipped rather than covering the page.
+            height: island-expanded ? min(320px, island-measure-wrapped.preferred-height + 12px) : 30px;
+            background: #F1F3F5;
+            border-width: 1px;
+            border-color: #E4E7EB;
+            border-radius: 15px;
+            // Nothing may be painted outside the capsule, otherwise a long
+            // wrapped notice draws over the title row and the tiles below.
+            clip: true;
+            drop-shadow-color: rgba(0, 0, 0, 0.16);
+            drop-shadow-blur: 16px;
+            drop-shadow-offset-y: 3px;
+
+            // Animated size: the island morphs between the clock and a notice of
+            // a different length instead of jumping. Both axes use the exact same
+            // duration and the same soft deceleration curve, so a width change and
+            // a downward expansion happen at the same time and at the same pace -
+            // never one after the other.
+            animate width {
+                duration: 300ms;
+                easing: spring(0.25);
+            }
+
+            animate height {
+                duration: 300ms;
+                easing: spring(0.25);
+            }
+
+            // Hover state of the chip: hovering expands it, leaving shrinks it.
+            island-touch := TouchArea { }
+
+            island-label := Text {
+                text: root.dynamic-island-text;
+                // Success notices are black, failures red.
+                color: root.island-error ? #C0292E : #1F2328;
+                font-size: 20px;
+                x: 10px;
+                width: parent.width - 20px;
+                // Collapsed: centred in the 30px capsule. Expanded: pinned near
+                // the top edge, so the first line stays where it was and only the
+                // extra lines appear below it. The position is animated with the
+                // capsule so the text glides with the resize instead of snapping.
+                y: island-expanded ? 6px : (parent.height - self.height) / 2;
+                animate y {
+                    duration: 300ms;
+                    easing: spring(0.25);
+                }
+                horizontal-alignment: center;
+                vertical-alignment: island-expanded ? top : center;
+                // Collapsed: one line, elided at the end. Expanded: the notice
+                // wraps and is clipped instead of elided, so the whole text can
+                // be read. Note that `elide` always wins over `word-wrap`, which
+                // is why the overflow mode has to follow the same condition.
+                wrap: island-expanded ? word-wrap : no-wrap;
+                overflow: island-expanded ? clip : elide;
+            }
+        }
+    }
+}

@@ -1,0 +1,759 @@
+//! Workspace page: working directory, file tree, project creation, template.
+//! and the automatic file classification.
+//!
+//! The page is a pure view: every button only fires a callback, all filesystem
+//! work happens in `src/workspace/`. The two panels are the same size, use the
+//! same 20px padding and sit on the same 8px rhythm, which is what makes the
+//! page read as one surface instead of two unrelated forms:
+//! left  - the working directory, its file tree and the area where files are
+//!         staged for the classifier;
+//! right - project name + template and the classification rules.
+
+// ScrollView and LineEdit come from the widgets library, so the page needs to
+// import them before it can use them.
+import { ScrollView, LineEdit } from "std-widgets.slint";
+
+// One half of the kind selector ([后缀] / [关键词]) used by every rule row.
+//
+// It is deliberately a copy of the window header's SwitchSegment: same colours,
+// same transparent cell, so the sliding highlight rectangle drawn underneath
+// (once per row) is the only thing that carries the selection — and that is what
+// makes the movement animatable exactly like the page switch above.
+// The moving highlight behind the two kind segments.
+//
+// It must not bind x/width to the model: a value that comes straight from a
+// model row is applied in one step, so it would jump instead of sliding. The
+// position is therefore written in `init` and in `changed`, which is an
+// ordinary property write and is what `animate` can interpolate.
+component KindShell inherits Rectangle {
+    in property <bool> keyword: false;
+
+    height: 30px;
+    background: #DFE3E8;
+    border-radius: 7px;
+    drop-shadow-color: rgba(0, 0, 0, 0.12);
+    drop-shadow-blur: 8px;
+    drop-shadow-offset-y: 2px;
+
+    init => {
+        self.x = keyword ? 62px : 0px;
+        self.width = keyword ? 62px : 60px;
+    }
+
+    changed keyword => {
+        self.x = keyword ? 62px : 0px;
+        self.width = keyword ? 62px : 60px;
+    }
+
+    animate x {
+        duration: 300ms;
+        easing: spring(0.35);
+    }
+
+    animate width {
+        duration: 300ms;
+        easing: spring(0.35);
+    }
+}
+
+component KindSegment inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <length> cell-width: 60px;
+    callback activated;
+
+    width: root.cell-width;
+    height: 30px;
+    border-radius: 7px;
+    // Only a hovered *and* inactive cell paints itself, the active one is
+    // already covered by the sliding highlight.
+    background: root.selected ? transparent : (kind-touch.has-hover ? #E6E9ED : transparent);
+
+    // Centred by hand: `width: parent.width` would tie the text width to the
+    // cell width and create a binding loop.
+    kind-label := Text {
+        text: root.label;
+        color: root.selected ? #1F2328 : #57606A;
+        font-size: 12.5px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    kind-touch := TouchArea {
+        clicked => {
+            root.activated();
+        }
+    }
+}
+
+// A flat button, the same look as the launchpad toolbar (white, one pixel border,
+// grey on hover). `primary` is the dark variant used for the main action.
+component WsButton inherits Rectangle {
+    in property <string> caption;
+    in property <bool> primary: false;
+    callback clicked();
+
+    height: 30px;
+    // The caption is not stretched: its own width drives the button width, which
+    // is what keeps the "never bound to parent.width" rule of this file.
+    width: max(56px, ws-caption.width + 26px);
+    border-radius: 7px;
+    background: root.primary
+        ? (ws-touch.has-hover ? #5A6470 : #4B5563)
+        : (ws-touch.has-hover ? #F3F4F6 : #FFFFFF);
+    border-width: root.primary ? 0px : 1px;
+    border-color: #E6E8EB;
+
+    ws-caption := Text {
+        text: root.caption;
+        color: root.primary ? #FFFFFF : #1F2328;
+        font-size: 13px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    ws-touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A read only box that shows a path; the text is elided so a deep path never
+// pushes the layout apart. The slightly grey fill is what marks it as a field
+// rather than a button.
+component WsPathBox inherits Rectangle {
+    in property <string> text;
+    in property <string> placeholder;
+    in property <bool> clickable: false;
+    callback clicked();
+
+    height: 30px;
+    border-radius: 7px;
+    background: ws-box-touch.has-hover && root.clickable ? #F0F2F4 : #F7F8FA;
+    border-width: 1px;
+    border-color: #EAECEF;
+
+    ws-path := Text {
+        x: 9px;
+        width: parent.width - 18px;
+        height: parent.height;
+        text: root.text == "" ? root.placeholder : root.text;
+        color: root.text == "" ? #9AA1AA : #1F2328;
+        font-size: 12.5px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    ws-box-touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A small caption above a field.
+component WsCaption inherits Text {
+    font-size: 12px;
+    color: #6B7280;
+    vertical-alignment: center;
+}
+
+// A section heading (the two panels are narrow, so it is smaller than the 20px
+// headings of the settings page).
+component WsTitle inherits Text {
+    font-size: 13px;
+    color: #1F2328;
+    font-weight: 600;
+    vertical-alignment: center;
+}
+
+// A hint line under a heading.
+component WsHint inherits Text {
+    font-size: 12px;
+    color: #6B7280;
+    wrap: word-wrap;
+}
+
+export component WorkspacePage inherits Rectangle {
+    background: transparent;
+    height: 630px;
+    width: 1190px;
+
+    // ---------- working directory ----------
+    in-out property <string> directory;
+    in property <string> directory-placeholder: "workspace-directory-placeholder";
+    in property <string> set-directory-text: "workspace-set-directory";
+    in property <string> directory-caption: "workspace-directory-caption";
+
+    // ---------- file tree ----------
+    // Parallel arrays: Slint cannot hand a struct to Rust, so one row is one
+    // index in six arrays (the same trick the launchpad tiles use).
+    in property <[int]> tree-depths;
+    in property <[string]> tree-names;
+    in property <[string]> tree-paths;
+    in property <[bool]> tree-is-dirs;
+    in property <[bool]> tree-expanded;
+    in property <[bool]> tree-has-children;
+    in property <string> tree-empty-text: "workspace-tree-empty";
+    in property <string> tree-label: "workspace-tree-label";
+
+    // ---------- files added for classification ----------
+    in property <[string]> added-names;
+    in property <string> added-empty-text: "workspace-nothing-staged";
+    in property <string> add-hint-text: "workspace-add-hint";
+    in property <string> add-files-text: "workspace-add-files";
+    in property <string> add-folder-text: "workspace-add-folder";
+    in property <string> clear-text: "workspace-clear";
+    in property <string> add-label: "workspace-add-label";
+
+    // ---------- project ----------
+    in-out property <string> project-name;
+    in property <string> project-name-placeholder: "workspace-project-placeholder";
+    in property <string> project-caption: "workspace-project-caption";
+    in property <string> add-project-text: "workspace-add-project";
+
+    // ---------- template ----------
+    in property <string> template-label: "workspace-template-label";
+    in property <string> template-current: "";
+    in property <string> import-folder-text: "workspace-import-folder";
+    in property <string> default-template-text: "workspace-template-builtin";
+
+    // ---------- classification rules ----------
+    in property <string> rules-label: "workspace-rules-label";
+    in property <string> add-rule-text: "workspace-add-rule";
+    in property <string> rules-hint: "workspace-rules-hint";
+    // Kind ids ("ext" / "keyword"), the captions come from kind-ext-text and
+    // kind-keyword-text so the segments can highlight the active one.
+    in property <[string]> rule-kinds;
+    in property <[string]> rule-values;
+    in property <[string]> rule-targets;
+    in property <string> rules-empty-text: "workspace-rules-empty";
+    in property <string> kind-ext-text: "workspace-kind-ext";
+    in property <string> kind-keyword-text: "workspace-kind-keyword";
+    in property <string> other-label: "workspace-other-label";
+    in property <string> other-hint: "workspace-other-hint";
+    in property <string> other-clear-text: "workspace-other-clear";
+    in property <string> other-target: "";
+    in property <string> value-ext-placeholder: ".mp3";
+    in property <string> value-keyword-placeholder: "workspace-value-keyword";
+    in property <string> rule-target-placeholder: "workspace-rule-target";
+    in property <string> rule-choose-text: "workspace-rule-choose";
+    in property <string> rule-remove-text: "workspace-rule-remove";
+
+    // ---------- processing ----------
+    in property <string> process-text: "workspace-process";
+    in property <string> result-text: "";
+    in property <bool> result-error: false;
+
+    callback choose-directory();
+    callback toggle-dir(string);
+    callback add-files();
+    callback add-folder();
+    callback clear-added();
+    callback create-project();
+    callback template-folder();
+    callback template-default();
+    callback add-rule();
+    callback rule-kind-chosen(int, string);
+    callback rule-value-edited(int, string);
+    callback rule-target(int);
+    callback rule-removed(int);
+    callback other-choose();
+    callback other-clear();
+    callback process();
+
+    // Both panels are 565px wide with a 20px gutter and a 20px page margin,
+    // so the two columns carry the same visual weight.
+    // ================= left panel: directory, tree, staged files =================
+    Rectangle {
+        x: 20px;
+        y: 16px;
+        width: 565px;
+        height: 594px;
+        background: #FFFFFF;
+        border-width: 1px;
+        border-color: #E7E9EC;
+        border-radius: 12px;
+        drop-shadow-color: rgba(0, 0, 0, 0.08);
+        drop-shadow-blur: 18px;
+        drop-shadow-offset-y: 4px;
+
+        WsCaption {
+            x: 20px;
+            y: 18px;
+            width: 200px;
+            height: 16px;
+            text: root.directory-caption;
+        }
+        WsPathBox {
+            x: 20px;
+            y: 38px;
+            width: 421px;
+            text: root.directory;
+            placeholder: root.directory-placeholder;
+        }
+        WsButton {
+            x: 449px;
+            y: 38px;
+            width: 96px;
+            caption: root.set-directory-text;
+            clicked => {
+                root.choose-directory();
+            }
+        }
+
+        WsTitle {
+            x: 20px;
+            y: 88px;
+            width: 200px;
+            height: 16px;
+            text: root.tree-label;
+        }
+
+
+        // The tree itself. Rows are 26px tall and indented by 16px per level;
+        // clicking a folder row asks the backend to expand or collapse it.
+        tree_scroll := ScrollView {
+            x: 20px;
+            y: 110px;
+            width: 525px;
+            height: 240px;
+            content-width: self.width;
+            content-height: max(self.height, root.tree-depths.length * 26px);
+
+            Rectangle {
+                width: 525px;
+                height: max(tree_scroll.height, root.tree-depths.length * 26px);
+
+                if root.tree-depths.length == 0 : WsHint {
+                    x: 2px;
+                    y: 6px;
+                    width: 480px;
+                    text: root.tree-empty-text;
+                }
+
+                for i in root.tree-depths.length : Rectangle {
+                    x: 6px;
+                    y: i * 26px;
+                    width: 503px;
+                    height: 26px;
+                    background: row-touch.has-hover ? #F4F5F7 : transparent;
+                    border-radius: 5px;
+
+                    // Expand arrow (folders only) then the name.
+                    Text {
+                        x: 4px + root.tree-depths[i] * 16px;
+                        y: 0px;
+                        width: 12px;
+                        height: parent.height;
+                        text: root.tree-is-dirs[i] && root.tree-has-children[i]
+                            ? (root.tree-expanded[i] ? "▾" : "▸")
+                            : "";
+                        font-size: 10px;
+                        color: #6B7280;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: 20px + root.tree-depths[i] * 16px;
+                        y: 0px;
+                        width: 490px - root.tree-depths[i] * 16px;
+                        height: parent.height;
+                        text: root.tree-names[i];
+                        font-size: 13px;
+                        color: root.tree-is-dirs[i] ? #1F2328 : #6B7280;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    row-touch := TouchArea {
+                        clicked => {
+                            if root.tree-is-dirs[i] {
+                                root.toggle-dir(root.tree-paths[i]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // A hairline keeps the two halves of the panel visibly apart without
+        // drawing another box.
+        Rectangle {
+            x: 20px;
+            y: 354px;
+            width: 525px;
+            height: 1px;
+            background: #F0F1F3;
+        }
+
+        // Staged files. They are only staged: "开始处理" copies them according
+        // to the rules, nothing is moved.
+        WsTitle {
+            x: 20px;
+            y: 368px;
+            width: 200px;
+            height: 16px;
+            text: root.add-label;
+        }
+        WsHint {
+            x: 20px;
+            y: 390px;
+            width: 525px;
+            text: root.add-hint-text;
+        }
+        WsButton {
+            x: 20px;
+            y: 432px;
+            width: 92px;
+            caption: root.add-files-text;
+            clicked => {
+                root.add-files();
+            }
+        }
+        WsButton {
+            x: 120px;
+            y: 432px;
+            width: 104px;
+            caption: root.add-folder-text;
+            clicked => {
+                root.add-folder();
+            }
+        }
+        WsButton {
+            x: 232px;
+            y: 432px;
+            width: 64px;
+            caption: root.clear-text;
+            clicked => {
+                root.clear-added();
+            }
+        }
+
+
+        added_scroll := ScrollView {
+            x: 20px;
+            y: 474px;
+            width: 525px;
+            height: 100px;
+            content-width: self.width;
+            content-height: max(self.height, root.added-names.length * 24px);
+
+            Rectangle {
+                width: 525px;
+                height: max(added_scroll.height, root.added-names.length * 24px);
+
+                if root.added-names.length == 0 : WsHint {
+                    x: 2px;
+                    y: 6px;
+                    width: 480px;
+                    text: root.added-empty-text;
+                }
+
+                for i in root.added-names.length : Text {
+                    x: 2px;
+                    y: i * 24px;
+                    width: 515px;
+                    height: 24px;
+                    text: root.added-names[i];
+                    font-size: 12.5px;
+                    color: #1F2328;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+
+    // ================= right panel: project, template, rules =================
+    Rectangle {
+        x: 605px;
+        y: 16px;
+        width: 565px;
+        height: 594px;
+        background: #FFFFFF;
+        border-width: 1px;
+        border-color: #E7E9EC;
+        border-radius: 12px;
+        drop-shadow-color: rgba(0, 0, 0, 0.08);
+        drop-shadow-blur: 18px;
+        drop-shadow-offset-y: 4px;
+
+        WsCaption {
+            x: 20px;
+            y: 18px;
+            width: 200px;
+            height: 16px;
+            text: root.project-caption;
+        }
+        // Project name + "add project".
+        LineEdit {
+            x: 20px;
+            y: 38px;
+            width: 421px;
+            height: 30px;
+            // Two way, so the window property always holds the typed name.
+            text <=> root.project-name;
+            placeholder-text: root.project-name-placeholder;
+            font-size: 13px;
+        }
+        WsButton {
+            x: 449px;
+            y: 38px;
+            width: 96px;
+            caption: root.add-project-text;
+            primary: true;
+            clicked => {
+                root.create-project();
+            }
+        }
+
+        // Template currently used for a new project.
+        WsTitle {
+            x: 20px;
+            y: 88px;
+            width: 200px;
+            height: 16px;
+            text: root.template-label;
+        }
+        Text {
+            x: 20px;
+            y: 110px;
+            width: 525px;
+            height: 18px;
+            text: root.template-current;
+            font-size: 12px;
+            color: #6B7280;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        WsButton {
+            x: 20px;
+            y: 134px;
+            width: 120px;
+            caption: root.import-folder-text;
+            clicked => {
+                root.template-folder();
+            }
+        }
+        WsButton {
+            x: 148px;
+            y: 134px;
+            width: 100px;
+            caption: root.default-template-text;
+            clicked => {
+                root.template-default();
+            }
+        }
+
+        Rectangle {
+            x: 20px;
+            y: 176px;
+            width: 525px;
+            height: 1px;
+            background: #F0F1F3;
+        }
+        // Classification rules.
+        WsTitle {
+            x: 20px;
+            y: 190px;
+            width: 200px;
+            height: 16px;
+            text: root.rules-label;
+        }
+        WsButton {
+            x: 453px;
+            y: 180px;
+            width: 92px;
+            caption: root.add-rule-text;
+            clicked => {
+                root.add-rule();
+            }
+        }
+        WsHint {
+            x: 20px;
+            y: 210px;
+            width: 525px;
+            text: root.rules-hint;
+        }
+
+
+        rules_scroll := ScrollView {
+            x: 20px;
+            y: 248px;
+            width: 525px;
+            height: 168px;
+            content-width: self.width;
+            content-height: max(self.height, root.rule-kinds.length * 36px + 6px);
+
+            Rectangle {
+                width: 525px;
+                height: max(rules_scroll.height, root.rule-kinds.length * 36px + 6px);
+
+                if root.rule-kinds.length == 0 : WsHint {
+                    x: 2px;
+                    y: 6px;
+                    width: 480px;
+                    text: root.rules-empty-text;
+                }
+
+                // One row: the kind is picked from two segments (it used to be a
+                // single button that silently flipped, which was unreadable),
+                // then the value, the target folder, choose and remove.
+                for i in root.rule-kinds.length : Rectangle {
+                    x: 8px;
+                    y: i * 36px + 4px;
+                    width: 503px;
+                    height: 30px;
+                    background: transparent;
+
+                    Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        width: 124px;
+                        height: 30px;
+                        background: #F1F3F5;
+                        border-radius: 7px;
+                    }
+                    // Sliding highlight, the same idea as the page switch in the
+                    // window header.
+                    KindShell {
+                        y: 0px;
+                        keyword: root.rule-kinds[i] == "keyword";
+                    }
+                    KindSegment {
+                        x: 0px;
+                        cell-width: 60px;
+                        label: root.kind-ext-text;
+                        selected: root.rule-kinds[i] == "ext";
+                        activated => {
+                            root.rule-kind-chosen(i, "ext");
+                        }
+                    }
+                    KindSegment {
+                        x: 62px;
+                        cell-width: 62px;
+                        label: root.kind-keyword-text;
+                        selected: root.rule-kinds[i] == "keyword";
+                        activated => {
+                            root.rule-kind-chosen(i, "keyword");
+                        }
+                    }
+
+                    LineEdit {
+                        x: 132px;
+                        width: 110px;
+                        height: 30px;
+                        // A model element cannot be part of a two way binding, so
+                        // the model is the source and the widget reports edits.
+                        text: root.rule-values[i];
+                        // The value is typed by the user; only the target folder
+                        // below is picked from a dialog, so the placeholders are
+                        // different on purpose.
+                        placeholder-text: root.rule-kinds[i] == "ext" ? root.value-ext-placeholder : root.value-keyword-placeholder;
+                        font-size: 12.5px;
+                        edited(text) => {
+                            root.rule-value-edited(i, text);
+                        }
+                    }
+                    WsPathBox {
+                        x: 250px;
+                        width: 169px;
+                        text: root.rule-targets[i];
+                        placeholder: root.rule-target-placeholder;
+                        clickable: true;
+                        clicked => {
+                            root.rule-target(i);
+                        }
+                    }
+                    WsButton {
+                        x: 423px;
+                        width: 46px;
+                        caption: root.rule-choose-text;
+                        clicked => {
+                            root.rule-target(i);
+                        }
+                    }
+                    WsButton {
+                        x: 471px;
+                        width: 46px;
+                        caption: root.rule-remove-text;
+                        clicked => {
+                            root.rule-removed(i);
+                        }
+                    }
+                }
+            }
+        }
+
+        // The fallback: files no rule matched still have to go somewhere, so the
+        // page gives that case its own row instead of hiding it in the list.
+        WsTitle {
+            x: 20px;
+            y: 428px;
+            width: 200px;
+            height: 16px;
+            text: root.other-label;
+        }
+        WsHint {
+            x: 20px;
+            y: 448px;
+            width: 525px;
+            text: root.other-hint;
+        }
+        WsPathBox {
+            x: 20px;
+            y: 476px;
+            width: 353px;
+            text: root.other-target;
+            placeholder: root.rule-target-placeholder;
+            clickable: true;
+            clicked => {
+                root.other-choose();
+            }
+        }
+        WsButton {
+            x: 381px;
+            y: 476px;
+            width: 64px;
+            caption: root.rule-choose-text;
+            clicked => {
+                root.other-choose();
+            }
+        }
+        WsButton {
+            x: 453px;
+            y: 476px;
+            width: 64px;
+            caption: root.other-clear-text;
+            clicked => {
+                root.other-clear();
+            }
+        }
+
+        // The main action is pinned to the bottom of the card so its baseline
+        // lines up with the last line of the left panel.
+        WsButton {
+            x: 20px;
+            y: 540px;
+            width: 130px;
+            height: 34px;
+            primary: true;
+            caption: root.process-text;
+            clicked => {
+                root.process();
+            }
+        }
+        Text {
+            x: 162px;
+            y: 540px;
+            width: 383px;
+            height: 34px;
+            text: root.result-text;
+            font-size: 12.5px;
+            color: root.result-error ? #C0292E : #1F2328;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
