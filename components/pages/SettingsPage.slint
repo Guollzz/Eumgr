@@ -23,6 +23,9 @@ export component SettingsPage inherits Rectangle {
     // Bubbles the "open log folder" click of the general page up to MainWindow.
     callback general-page-open-logs();
 
+    // Bubbles the "clear old logs" click of the general page up to MainWindow.
+    callback general-page-clear-logs();
+
     // Reports user actions ("settings.page.about", ...) to MainWindow, which
     // forwards them to the shared LogBridge. A page cannot use the global
     // directly because that would create a circular import.
@@ -43,6 +46,7 @@ export component SettingsPage inherits Rectangle {
     // Section label of the log block, forwarded to GeneralPage.
     in property <string> logs: "logs";
     in property <string> open-logs-text: "open-logs";
+    in property <string> clear-logs-text: "clear-logs";
 
     // Selected category: 0 = general, 1 = about. Owned by MainWindow so that
     // the selection can be restored from the configuration file.
@@ -185,6 +189,7 @@ export component SettingsPage inherits Rectangle {
             lang: current-language;
             logs: root.logs;
             open-logs-text: open-logs-text;
+            clear-logs-text: root.clear-logs-text;
 
             general-page-language-combo-selected(value) => {
                 general-page-language(value)
@@ -194,6 +199,12 @@ export component SettingsPage inherits Rectangle {
             // folder that holds the log files.
             general-page-open-logs() => {
                 root.general-page-open-logs();
+            }
+
+            // Forwarded to MainWindow, which asks the Rust side to delete the
+            // older log files.
+            general-page-clear-logs() => {
+                root.general-page-clear-logs();
             }
         }
 

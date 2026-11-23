@@ -28,6 +28,9 @@ export global CallbackBridge {
     callback general-page-language-selected(string);
     // Emitted when the user asks for the folder that holds the log files.
     callback general-page-open-logs();
+    // Emitted when the user asks to delete every log file except the one of
+    // this run.
+    callback general-page-clear-logs();
 }
 
 // Commands of the custom title bar. The window has no native frame, so moving,
@@ -86,8 +89,11 @@ export global NavigationBridge {
 // button only reports what the user asked for, the Rust side does the work and
 // writes the outcome back into the window properties.
 export global WorkspaceBridge {
-    // Opens the picker for the working directory.
-    callback choose-directory();
+    // Adds a working directory (or switches to it when it is already known).
+    callback add-directory();
+    // Switches to one known working directory; the payload is its index in
+    // `workspace-directories`.
+    callback directory-selected(int);
     // Expands or collapses a folder row of the file tree.
     callback toggle-dir(string);
     // Stages files, a folder, or clears the staged list.
@@ -105,6 +111,10 @@ export global WorkspaceBridge {
     callback rule-kind-chosen(int, string);
     callback rule-value-edited(int, string);
     callback rule-target(int);
+    // Scope of the rule that is added next ("global" / "local"), and the
+    // scope chip of an existing row.
+    callback rule-scope-chosen(string);
+    callback rule-scope-toggled(int);
     // The fallback rule: where files that match no rule are copied to.
     callback other-choose();
     callback other-clear();
@@ -316,12 +326,18 @@ export component MainWindow inherits Window {
 
     // Localised label of the "open log folder" button in the general settings.
     in-out property <string> open-logs-text: "open-logs";
+    // Localised label of the "clear old logs" button.
+    in-out property <string> clear-logs-text: "clear-logs";
     // Section label of the log block of the general settings page.
     in-out property <string> logs-text: "logs";
 
     // ---------- workspace page ----------
     // Absolute path of the working directory whose tree is shown.
     in-out property <string> workspace-directory: "";
+    // Working directories the page's drop-down can switch between, and the
+    // index of the active one inside that list.
+    in-out property <[string]> workspace-directories;
+    in-out property <int> workspace-directory-index: 0;
     // The file tree, one row per index (Slint cannot hand a struct to Rust).
     in-out property <[int]> workspace-tree-depths;
     in-out property <[string]> workspace-tree-names;
@@ -339,12 +355,20 @@ export component MainWindow inherits Window {
     in-out property <[string]> workspace-rule-kinds;
     in-out property <[string]> workspace-rule-values;
     in-out property <[string]> workspace-rule-targets;
+    // Scope ("global" / "local") of every visible rule row, plus the scope
+    // preselected for the next rule.
+    in-out property <[string]> workspace-rule-scopes;
+    in-out property <string> workspace-rule-scope: "global";
     // Result line under the "开始处理" button.
     in-out property <string> workspace-result: "";
     in-out property <bool> workspace-result-error: false;
 
     // Localised workspace texts.
     in-out property <string> workspace-set-directory: "";
+    in-out property <string> workspace-add-directory: "";
+    in-out property <string> workspace-scope-caption: "";
+    in-out property <string> workspace-scope-global: "";
+    in-out property <string> workspace-scope-local: "";
     in-out property <string> workspace-tree-label: "";
     in-out property <string> workspace-tree-empty: "";
     in-out property <string> workspace-directory-placeholder: "";
@@ -629,9 +653,17 @@ export component MainWindow inherits Window {
                     if root.page-alive-workspace : WorkspacePage {
                         x: 0px;
                     directory: root.workspace-directory;
+                    directories: root.workspace-directories;
+                    directory-index <=> root.workspace-directory-index;
                     directory-placeholder: root.workspace-directory-placeholder;
                     directory-caption: root.workspace-directory-caption;
                     set-directory-text: root.workspace-set-directory;
+                    add-directory-text: root.workspace-add-directory;
+                    scope-caption: root.workspace-scope-caption;
+                    scope-global-text: root.workspace-scope-global;
+                    scope-local-text: root.workspace-scope-local;
+                    rule-scope: root.workspace-rule-scope;
+                    rule-scopes: root.workspace-rule-scopes;
                     tree-depths: root.workspace-tree-depths;
                     tree-names: root.workspace-tree-names;
                     tree-paths: root.workspace-tree-paths;
@@ -677,7 +709,8 @@ export component MainWindow inherits Window {
                     result-text: root.workspace-result;
                     result-error: root.workspace-result-error;
 
-                    choose-directory => { WorkspaceBridge.choose-directory(); }
+                    add-directory => { WorkspaceBridge.add-directory(); }
+                    directory-selected(index) => { WorkspaceBridge.directory-selected(index); }
                     toggle-dir(path) => { WorkspaceBridge.toggle-dir(path); }
                     add-files => { WorkspaceBridge.add-files(); }
                     add-folder => { WorkspaceBridge.add-folder(); }
@@ -691,6 +724,8 @@ export component MainWindow inherits Window {
                     rule-kind-chosen(index, kind) => { WorkspaceBridge.rule-kind-chosen(index, kind); }
                     rule-value-edited(index, value) => { WorkspaceBridge.rule-value-edited(index, value); }
                     rule-target(index) => { WorkspaceBridge.rule-target(index); }
+                    rule-scope-chosen(scope) => { WorkspaceBridge.rule-scope-chosen(scope); }
+                    rule-scope-toggled(index) => { WorkspaceBridge.rule-scope-toggled(index); }
                     rule-removed(index) => { WorkspaceBridge.rule-removed(index); }
                     process => { WorkspaceBridge.process(); }
                 }
@@ -740,6 +775,7 @@ export component MainWindow inherits Window {
                     current-language: current-language;
                     logs: root.logs-text;
                     open-logs-text: root.open-logs-text;
+                    clear-logs-text: root.clear-logs-text;
 
                     // The selected category is owned by the window so it can be
                     // stored in the configuration file and restored on start-up.
@@ -764,6 +800,11 @@ export component MainWindow inherits Window {
                     // "Open log folder" button of the general settings page.
                     general-page-open-logs() => {
                         CallbackBridge.general-page-open-logs();
+                    }
+
+                    // "Clear old logs" button of the general settings page.
+                    general-page-clear-logs() => {
+                        CallbackBridge.general-page-clear-logs();
                     }
                 }
                 }

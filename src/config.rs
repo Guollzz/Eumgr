@@ -55,12 +55,29 @@ pub struct LaunchpadState {
     pub continuous: Vec<String>,
 }
 
+/// Scope of a rule that applies to every working directory.
+pub const RULE_SCOPE_GLOBAL: &str = "global";
+
+/// Scope of a rule that only applies to its own working directory.
+pub const RULE_SCOPE_LOCAL: &str = "local";
+
+/// Scope used when a rule does not say one (files written by an older version
+/// only knew `kind`, `value` and `target`; those rules were global by nature).
+fn default_rule_scope() -> String {
+    RULE_SCOPE_GLOBAL.to_string()
+}
+
 /// One rule of the automatic file classification.
 ///
 /// A rule matches a file either by its extension (`kind == "ext"`, `value` like
 /// ".mp3") or by a substring of its name (`kind == "keyword"`). Every matching
 /// rule copies the file into its own `target` folder, so two rules with the same
 /// condition but different folders deliberately produce two copies.
+///
+/// `scope` decides which working directories the rule belongs to: a `global`
+/// rule is shown (and applied) in every directory, a `local` rule only in the
+/// directory stored in `directory`. That is what keeps the rule list of one
+/// project from leaking into the next one.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct ClassifyRule {
     /// "ext" or "keyword"; anything else is treated as "keyword" when matching.
@@ -72,6 +89,12 @@ pub struct ClassifyRule {
     /// Destination folder, absolute or relative to the workspace directory.
     #[serde(default)]
     pub target: String,
+    /// "global" or "local", see [`RULE_SCOPE_GLOBAL`] / [`RULE_SCOPE_LOCAL`].
+    #[serde(default = "default_rule_scope")]
+    pub scope: String,
+    /// Working directory a local rule belongs to; empty for a global rule.
+    #[serde(default)]
+    pub directory: String,
 }
 
 /// Everything the workspace page has to remember.
@@ -80,10 +103,15 @@ pub struct WorkspaceState {
     /// Directory the file tree shows and that projects are created in.
     #[serde(default)]
     pub directory: String,
+    /// Working directories the drop-down can switch between. `directory` is
+    /// always one of them.
+    #[serde(default)]
+    pub directories: Vec<String>,
     /// Custom template: a folder or a .zip. Empty means the default template.
     #[serde(default)]
     pub template: String,
-    /// Classification rules, in display order.
+    /// Classification rules, in display order. Global and local rules of every
+    /// working directory share this one list; the page filters it.
     #[serde(default)]
     pub rules: Vec<ClassifyRule>,
 }
@@ -174,10 +202,11 @@ impl Config {
             }
         };
         config.clamp_pages(path);
+        config.normalize_workspace(path);
         logs::logs_output::logs_output(
             "config::Config::load",
             &format!(
-                "Configuration loaded from {} (language = \"{}\", page = {}/{}, {} launchpad item(s), {} continuous, workspace \"{}\", template \"{}\", {} rule(s)).",
+                "Configuration loaded from {} (language = \"{}\", page = {}/{}, {} launchpad item(s), {} continuous, workspace \"{}\" ({} known), template \"{}\", {} rule(s)).",
                 path,
                 config.language,
                 config.page.main,
@@ -185,6 +214,7 @@ impl Config {
                 config.launchpad.items.len(),
                 config.launchpad.continuous.len(),
                 config.workspace.directory,
+                config.workspace.directories.len(),
                 config.workspace.template,
                 config.workspace.rules.len()
             ),
@@ -219,6 +249,66 @@ impl Config {
                 &format!(
                     "{}: page.settings {} is out of range, clamped to {}.",
                     path, settings, self.page.settings
+                ),
+                "warn",
+            );
+        }
+    }
+
+    /// Brings the directory list and the rule scopes into a consistent shape.
+    ///
+    /// Older files have no `directories` list at all, so the stored directory is
+    /// seeded into it here. Literal duplicates (same folder typed twice with a
+    /// different capitalisation) are dropped, and a local rule without a
+    /// directory falls back to global instead of silently hiding forever.
+    fn normalize_workspace(&mut self, path: &str) {
+        let mut directories: Vec<String> = Vec::new();
+        for entry in self.workspace.directories.drain(..) {
+            let entry = entry.trim().to_string();
+            if entry.is_empty() {
+                continue;
+            }
+            if directories
+                .iter()
+                .any(|known| known.to_lowercase() == entry.to_lowercase())
+            {
+                continue;
+            }
+            directories.push(entry);
+        }
+
+        let active = self.workspace.directory.trim().to_string();
+        self.workspace.directory = active.clone();
+        if !active.is_empty()
+            && !directories
+                .iter()
+                .any(|known| known.to_lowercase() == active.to_lowercase())
+        {
+            directories.push(active.clone());
+        }
+        if self.workspace.directory.is_empty() {
+            if let Some(first) = directories.first() {
+                self.workspace.directory = first.clone();
+            }
+        }
+        self.workspace.directories = directories;
+
+        let mut repaired = 0usize;
+        for rule in &mut self.workspace.rules {
+            if rule.scope != RULE_SCOPE_LOCAL {
+                rule.scope = RULE_SCOPE_GLOBAL.to_string();
+                rule.directory.clear();
+            } else if rule.directory.trim().is_empty() {
+                rule.scope = RULE_SCOPE_GLOBAL.to_string();
+                repaired += 1;
+            }
+        }
+        if repaired > 0 {
+            logs::logs_output::logs_output(
+                "config::Config::load",
+                &format!(
+                    "{}: {} local rule(s) had no directory and were made global.",
+                    path, repaired
                 ),
                 "warn",
             );

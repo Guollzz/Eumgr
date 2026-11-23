@@ -11,7 +11,7 @@
 
 // ScrollView and LineEdit come from the widgets library, so the page needs to
 // import them before it can use them.
-import { ScrollView, LineEdit } from "std-widgets.slint";
+import { ScrollView, LineEdit, ComboBox } from "std-widgets.slint";
 
 // One half of the kind selector ([后缀] / [关键词]) used by every rule row.
 //
@@ -51,6 +51,36 @@ component KindShell inherits Rectangle {
     }
 
     animate width {
+        duration: 300ms;
+        easing: spring(0.35);
+    }
+}
+
+// Sliding highlight behind the two scope segments ("global" / "local").
+//
+// Same shape and animation as KindShell, but the two cells are 54px wide each
+// and the position only depends on one boolean, so the rule row and the header
+// can share the look without sharing the geometry.
+component ScopeShell inherits Rectangle {
+    in property <bool> local: false;
+
+    height: 30px;
+    width: 54px;
+    background: #DFE3E8;
+    border-radius: 7px;
+    drop-shadow-color: rgba(0, 0, 0, 0.12);
+    drop-shadow-blur: 8px;
+    drop-shadow-offset-y: 2px;
+
+    init => {
+        self.x = local ? 56px : 0px;
+    }
+
+    changed local => {
+        self.x = local ? 56px : 0px;
+    }
+
+    animate x {
         duration: 300ms;
         easing: spring(0.35);
     }
@@ -182,8 +212,13 @@ export component WorkspacePage inherits Rectangle {
 
     // ---------- working directory ----------
     in-out property <string> directory;
+    // Known working directories, shown by the drop-down in front of the path
+    // box, and the index of the active one.
+    in property <[string]> directories;
+    in-out property <int> directory-index: 0;
     in property <string> directory-placeholder: "workspace-directory-placeholder";
     in property <string> set-directory-text: "workspace-set-directory";
+    in property <string> add-directory-text: "workspace-add-directory";
     in property <string> directory-caption: "workspace-directory-caption";
 
     // ---------- file tree ----------
@@ -223,11 +258,19 @@ export component WorkspacePage inherits Rectangle {
     in property <string> rules-label: "workspace-rules-label";
     in property <string> add-rule-text: "workspace-add-rule";
     in property <string> rules-hint: "workspace-rules-hint";
+    // Scope selector in the rules header: the scope of the next added rule.
+    in property <string> scope-caption: "workspace-scope-caption";
+    in property <string> scope-global-text: "workspace-scope-global";
+    in property <string> scope-local-text: "workspace-scope-local";
+    in-out property <string> rule-scope: "global";
     // Kind ids ("ext" / "keyword"), the captions come from kind-ext-text and
     // kind-keyword-text so the segments can highlight the active one.
     in property <[string]> rule-kinds;
     in property <[string]> rule-values;
     in property <[string]> rule-targets;
+    // Scope id ("global" / "local") of every rule row, drawn as a chip that can
+    // be clicked to move the rule to the other scope.
+    in property <[string]> rule-scopes;
     in property <string> rules-empty-text: "workspace-rules-empty";
     in property <string> kind-ext-text: "workspace-kind-ext";
     in property <string> kind-keyword-text: "workspace-kind-keyword";
@@ -246,7 +289,9 @@ export component WorkspacePage inherits Rectangle {
     in property <string> result-text: "";
     in property <bool> result-error: false;
 
-    callback choose-directory();
+    callback add-directory();
+    // Switching the working directory from the drop-down.
+    callback directory-selected(int);
     callback toggle-dir(string);
     callback add-files();
     callback add-folder();
@@ -255,6 +300,9 @@ export component WorkspacePage inherits Rectangle {
     callback template-folder();
     callback template-default();
     callback add-rule();
+    // Scope of the next rule, and the scope chip of an existing row.
+    callback rule-scope-chosen(string);
+    callback rule-scope-toggled(int);
     callback rule-kind-chosen(int, string);
     callback rule-value-edited(int, string);
     callback rule-target(int);
@@ -286,10 +334,24 @@ export component WorkspacePage inherits Rectangle {
             height: 16px;
             text: root.directory-caption;
         }
-        WsPathBox {
+        // Quick switch between the known working directories. 160px is the
+        // minimum width of the standard widget; the path box next to it gave up
+        // the space for it.
+        directory-combo := ComboBox {
             x: 20px;
+            y: 37px;
+            width: 160px;
+            height: 32px;
+            model: root.directories;
+            current-index <=> root.directory-index;
+            selected(value) => {
+                root.directory-selected(directory-combo.current-index);
+            }
+        }
+        WsPathBox {
+            x: 188px;
             y: 38px;
-            width: 421px;
+            width: 253px;
             text: root.directory;
             placeholder: root.directory-placeholder;
         }
@@ -297,9 +359,9 @@ export component WorkspacePage inherits Rectangle {
             x: 449px;
             y: 38px;
             width: 96px;
-            caption: root.set-directory-text;
+            caption: root.add-directory-text;
             clicked => {
-                root.choose-directory();
+                root.add-directory();
             }
         }
 
@@ -561,10 +623,51 @@ export component WorkspacePage inherits Rectangle {
             height: 16px;
             text: root.rules-label;
         }
-        WsButton {
-            x: 453px;
+        // Scope of the rule that "add rule" creates. A new rule starts as a
+        // global rule; switching to "local" binds it to the working directory
+        // that is active right now.
+        WsCaption {
+            x: 255px;
+            y: 190px;
+            width: 70px;
+            height: 16px;
+            text: root.scope-caption;
+        }
+        Rectangle {
+            x: 325px;
             y: 180px;
-            width: 92px;
+            width: 110px;
+            height: 30px;
+            background: #F1F3F5;
+            border-radius: 7px;
+
+            ScopeShell {
+                y: 0px;
+                local: root.rule-scope == "local";
+            }
+            KindSegment {
+                x: 0px;
+                cell-width: 54px;
+                label: root.scope-global-text;
+                selected: root.rule-scope == "global";
+                activated => {
+                    root.rule-scope-chosen("global");
+                }
+            }
+            KindSegment {
+                x: 56px;
+                cell-width: 54px;
+                label: root.scope-local-text;
+                selected: root.rule-scope == "local";
+                activated => {
+                    root.rule-scope-chosen("local");
+                }
+            }
+        }
+        WsButton {
+            x: 445px;
+            y: 180px;
+            width: 100px;
             caption: root.add-rule-text;
             clicked => {
                 root.add-rule();
@@ -597,9 +700,10 @@ export component WorkspacePage inherits Rectangle {
                     text: root.rules-empty-text;
                 }
 
-                // One row: the kind is picked from two segments (it used to be a
-                // single button that silently flipped, which was unreadable),
-                // then the value, the target folder, choose and remove.
+                // One row: the scope chip, then the kind picked from two
+                // segments (it used to be a single button that silently
+                // flipped, which was unreadable), then the value, the target
+                // folder, choose and remove.
                 for i in root.rule-kinds.length : Rectangle {
                     x: 8px;
                     y: i * 36px + 4px;
@@ -607,42 +711,78 @@ export component WorkspacePage inherits Rectangle {
                     height: 30px;
                     background: transparent;
 
+                    // Global / local chip. Clicking it moves the rule to the
+                    // other scope, which is the only way to change it later.
                     Rectangle {
                         x: 0px;
+                        y: 0px;
+                        width: 40px;
+                        height: 30px;
+                        border-radius: 7px;
+                        background: scope-touch.has-hover ? #E3E7EB : #EEF1F4;
+
+                        Text {
+                            x: 0px;
+                            y: 0px;
+                            width: 40px;
+                            height: 30px;
+                            text: root.rule-scopes[i] == "local"
+                                ? root.scope-local-text
+                                : root.scope-global-text;
+                            color: #4B5563;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        scope-touch := TouchArea {
+                            clicked => {
+                                root.rule-scope-toggled(i);
+                            }
+                        }
+                    }
+
+                    // The kind track is a container so the sliding highlight
+                    // keeps its own 0/62px coordinates: a kind shell placed at a
+                    // positive x would be overwritten by its own `init`.
+                    Rectangle {
+                        x: 44px;
                         y: 0px;
                         width: 124px;
                         height: 30px;
                         background: #F1F3F5;
                         border-radius: 7px;
-                    }
-                    // Sliding highlight, the same idea as the page switch in the
-                    // window header.
-                    KindShell {
-                        y: 0px;
-                        keyword: root.rule-kinds[i] == "keyword";
-                    }
-                    KindSegment {
-                        x: 0px;
-                        cell-width: 60px;
-                        label: root.kind-ext-text;
-                        selected: root.rule-kinds[i] == "ext";
-                        activated => {
-                            root.rule-kind-chosen(i, "ext");
+
+                        // Sliding highlight, the same idea as the page switch in
+                        // the window header.
+                        KindShell {
+                            y: 0px;
+                            keyword: root.rule-kinds[i] == "keyword";
                         }
-                    }
-                    KindSegment {
-                        x: 62px;
-                        cell-width: 62px;
-                        label: root.kind-keyword-text;
-                        selected: root.rule-kinds[i] == "keyword";
-                        activated => {
-                            root.rule-kind-chosen(i, "keyword");
+                        KindSegment {
+                            x: 0px;
+                            cell-width: 60px;
+                            label: root.kind-ext-text;
+                            selected: root.rule-kinds[i] == "ext";
+                            activated => {
+                                root.rule-kind-chosen(i, "ext");
+                            }
+                        }
+                        KindSegment {
+                            x: 62px;
+                            cell-width: 62px;
+                            label: root.kind-keyword-text;
+                            selected: root.rule-kinds[i] == "keyword";
+                            activated => {
+                                root.rule-kind-chosen(i, "keyword");
+                            }
                         }
                     }
 
                     LineEdit {
-                        x: 132px;
-                        width: 110px;
+                        x: 174px;
+                        width: 90px;
                         height: 30px;
                         // A model element cannot be part of a two way binding, so
                         // the model is the source and the widget reports edits.
@@ -657,8 +797,8 @@ export component WorkspacePage inherits Rectangle {
                         }
                     }
                     WsPathBox {
-                        x: 250px;
-                        width: 169px;
+                        x: 270px;
+                        width: 116px;
                         text: root.rule-targets[i];
                         placeholder: root.rule-target-placeholder;
                         clickable: true;
@@ -667,16 +807,16 @@ export component WorkspacePage inherits Rectangle {
                         }
                     }
                     WsButton {
-                        x: 423px;
-                        width: 46px;
+                        x: 390px;
+                        width: 55px;
                         caption: root.rule-choose-text;
                         clicked => {
                             root.rule-target(i);
                         }
                     }
                     WsButton {
-                        x: 471px;
-                        width: 46px;
+                        x: 448px;
+                        width: 55px;
                         caption: root.rule-remove-text;
                         clicked => {
                             root.rule-removed(i);

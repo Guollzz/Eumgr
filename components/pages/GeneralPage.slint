@@ -6,6 +6,38 @@
 
 import { ComboBox } from "std-widgets.slint";
 
+// One flat button of the log block: white fill, one pixel border and a light
+// grey hover, the same surface the other pages use for secondary actions.
+//
+// Both log actions use it, so their size and baseline can never drift apart.
+component SettingsButton inherits Rectangle {
+    in property <string> caption;
+    callback clicked();
+
+    width: 160px;
+    height: 33px;
+    background: touch.has-hover ? #F1F3F5 : white;
+    border-width: 1px;
+    border-color: #E4E7EB;
+    border-radius: 6px;
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    // Centred by hand: the text is a sibling of the touch area, not a layout
+    // child, so it does not stretch.
+    Text {
+        text: root.caption;
+        font-size: 15px;
+        color: #1F2328;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
 export component GeneralPage inherits Rectangle {
     background: transparent;
     height: 620px;
@@ -19,6 +51,10 @@ export component GeneralPage inherits Rectangle {
     // SettingsPage forwards it the same way as the language change.
     callback general-page-open-logs();
 
+    // Emitted when the user asks to delete every log of an older run. The log
+    // of the current run is kept, see src/logs/logs_path.rs.
+    callback general-page-clear-logs();
+
     // Localised label and the language code currently stored in the config.
     in-out property <string> language: "language";
     in-out property <string> lang: "zh-CN";
@@ -26,6 +62,8 @@ export component GeneralPage inherits Rectangle {
     in property <string> logs: "logs";
     // Label of the "open log folder" button, localised by the Rust side.
     in property <string> open-logs-text: "open-logs";
+    // Label of the "clear old logs" button, localised by the Rust side.
+    in property <string> clear-logs-text: "clear-logs";
     // Item shown in the closed combo box (must match one entry of `model`).
     property <string> view-language: "简体中文";
     // Index of the selected entry inside `model`.
@@ -109,32 +147,23 @@ export component GeneralPage inherits Rectangle {
         font-size: 20px;
     }
 
-    // Opens the folder that contains the log file of this run. Styled like the
-    // other flat surfaces: white fill, 1px border, light grey on hover.
-    Rectangle {
+    // Two log actions side by side: open the folder, or delete every log of an
+    // older run (the file of this run is kept).
+    SettingsButton {
         x: 18px;
         y: 150px;
-        width: 160px;
-        height: 33px;
-        background: logs-touch.has-hover ? #F1F3F5 : white;
-        border-width: 1px;
-        border-color: #E4E7EB;
-        border-radius: 6px;
-
-        logs-touch := TouchArea {
-            clicked => {
-                root.general-page-open-logs();
-            }
+        caption: root.open-logs-text;
+        clicked => {
+            root.general-page-open-logs();
         }
+    }
 
-        // Centred by hand: the text is a sibling of the touch area, not a layout
-        // child, so it does not stretch.
-        Text {
-            text: root.open-logs-text;
-            font-size: 15px;
-            color: #1F2328;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+    SettingsButton {
+        x: 188px;
+        y: 150px;
+        caption: root.clear-logs-text;
+        clicked => {
+            root.general-page-clear-logs();
         }
     }
 }

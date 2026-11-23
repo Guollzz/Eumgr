@@ -87,9 +87,14 @@ fn update_app_texts(app: &MainWindow, locale: &Locale) {
     // Section label and button label of the general settings page.
     app.set_logs_text(locale.t("logs").into());
     app.set_open_logs_text(locale.t("open-logs").into());
+    app.set_clear_logs_text(locale.t("clear-logs").into());
 
     // Workspace page: every label of the two panels.
     app.set_workspace_set_directory(locale.t("workspace-set-directory").into());
+    app.set_workspace_add_directory(locale.t("workspace-add-directory").into());
+    app.set_workspace_scope_caption(locale.t("workspace-scope-caption").into());
+    app.set_workspace_scope_global(locale.t("workspace-scope-global").into());
+    app.set_workspace_scope_local(locale.t("workspace-scope-local").into());
     app.set_workspace_tree_label(locale.t("workspace-tree-label").into());
     app.set_workspace_tree_empty(locale.t("workspace-tree-empty").into());
     app.set_workspace_directory_placeholder(locale.t("workspace-directory-placeholder").into());
@@ -306,6 +311,10 @@ struct WorkspaceUi {
     /// this model instead of rebuilding it, so the sliding highlight can
     /// animate: a rebuilt row would start at its new position.
     kinds: RefCell<Option<Rc<VecModel<SharedString>>>>,
+    /// Scope selected for the next rule that is added ("global" / "local").
+    /// Session state on purpose: the last choice should not be inherited from a
+    /// completely different session.
+    scope: String,
 }
 
 /// Shared handle of the workspace session state.
@@ -327,20 +336,58 @@ fn elide_front(path: &str, keep: usize) -> String {
     format!("…\\{}", parts[parts.len() - keep..].join("\\"))
 }
 
-/// Maps the index the page uses (which only counts ordinary rules) to the index
-/// inside `config.workspace.rules` (which also holds the fallback rule).
+/// True when `rule` belongs to the working directory `directory`.
 ///
-/// The page shows the fallback rule in its own block instead of as a list row,
-/// so the two indices drift apart as soon as one exists.
-fn ui_rule_index(config: &config::Config, ui_index: usize) -> Option<usize> {
+/// Global rules are shown everywhere; a local rule only in the directory it was
+/// created in. A local rule without a directory can no longer be seen, which is
+/// why `Config::normalize_workspace` turns those into global rules.
+fn rule_visible(rule: &config::ClassifyRule, directory: &str) -> bool {
+    if rule.scope != config::RULE_SCOPE_LOCAL {
+        return true;
+    }
+    !rule.directory.trim().is_empty() && rule.directory.eq_ignore_ascii_case(directory)
+}
+
+/// Indices inside `config.workspace.rules` that the current directory shows.
+///
+/// The list keeps the stored order, so removing one row cannot reorder the rest.
+fn visible_rule_indices(config: &config::Config) -> Vec<usize> {
+    let directory = config.workspace.directory.as_str();
     config
         .workspace
         .rules
         .iter()
         .enumerate()
-        .filter(|(_, rule)| rule.kind != "other")
-        .nth(ui_index)
+        .filter(|(_, rule)| rule_visible(rule, directory))
         .map(|(index, _)| index)
+        .collect()
+}
+
+/// The rules the classifier applies in the current working directory.
+///
+/// Hidden rules of other directories must not match, so the classifier receives
+/// the filtered list instead of the whole configuration.
+fn rules_for_directory(config: &config::Config) -> Vec<config::ClassifyRule> {
+    config
+        .workspace
+        .rules
+        .iter()
+        .filter(|rule| rule_visible(rule, &config.workspace.directory))
+        .cloned()
+        .collect()
+}
+
+/// Maps the index the page uses (which only counts ordinary rules) to the index
+/// inside `config.workspace.rules` (which also holds the fallback rule and the
+/// rules of the other working directories).
+///
+/// The page shows the fallback rule in its own block instead of as a list row,
+/// so the two indices drift apart as soon as one exists.
+fn ui_rule_index(config: &config::Config, ui_index: usize) -> Option<usize> {
+    visible_rule_indices(config)
+        .into_iter()
+        .filter(|index| config.workspace.rules[*index].kind != "other")
+        .nth(ui_index)
 }
 
 /// Text shown under the template heading: the configured template folder, or
@@ -367,6 +414,25 @@ fn refresh_workspace(
     ui: &WorkspaceUi,
 ) {
     app.set_workspace_directory(config.workspace.directory.clone().into());
+
+    // Drop-down of the known working directories. The label keeps the end of
+    // the path, because that is the part that tells two directories apart.
+    let labels: Vec<SharedString> = config
+        .workspace
+        .directories
+        .iter()
+        .map(|directory| SharedString::from(elide_front(directory, 2)))
+        .collect();
+    let active_index = config
+        .workspace
+        .directories
+        .iter()
+        .position(|directory| {
+            directory.eq_ignore_ascii_case(config.workspace.directory.as_str())
+        })
+        .unwrap_or(0);
+    app.set_workspace_directories(ModelRc::new(VecModel::from(labels)));
+    app.set_workspace_directory_index(i32::try_from(active_index).unwrap_or(0));
 
     let rows = match workspace::usable_directory(&config.workspace.directory) {
         Some(root) => workspace::flatten(&root, &ui.expanded),
@@ -402,11 +468,18 @@ fn refresh_workspace(
 
     app.set_workspace_template_current(template_text(config, locale).into());
 
-    let mut kinds: Vec<SharedString> = Vec::with_capacity(config.workspace.rules.len());
-    let mut values: Vec<SharedString> = Vec::with_capacity(config.workspace.rules.len());
-    let mut targets: Vec<SharedString> = Vec::with_capacity(config.workspace.rules.len());
+    // Only the rules of the current directory are shown: every global rule plus
+    // the local rules that were created for this directory. Rules of another
+    // directory stay in the configuration but are not part of the page.
+    let visible = visible_rule_indices(config);
+    let hidden = config.workspace.rules.len().saturating_sub(visible.len());
+    let mut kinds: Vec<SharedString> = Vec::with_capacity(visible.len());
+    let mut values: Vec<SharedString> = Vec::with_capacity(visible.len());
+    let mut targets: Vec<SharedString> = Vec::with_capacity(visible.len());
+    let mut scopes: Vec<SharedString> = Vec::with_capacity(visible.len());
     let mut other_target = String::new();
-    for rule in &config.workspace.rules {
+    for index in visible {
+        let rule = &config.workspace.rules[index];
         // The fallback rule is not a row of the list: the page shows it in its
         // own block below the list, so it is pulled out here.
         if rule.kind == "other" {
@@ -418,21 +491,27 @@ fn refresh_workspace(
         kinds.push(SharedString::from(rule.kind.clone()));
         values.push(SharedString::from(rule.value.clone()));
         targets.push(SharedString::from(elide_front(&rule.target, 2)));
+        scopes.push(SharedString::from(rule.scope.clone()));
     }
     let kinds_model = Rc::new(VecModel::from(kinds));
     *ui.kinds.borrow_mut() = Some(kinds_model.clone());
     app.set_workspace_rule_kinds(ModelRc::from(kinds_model));
     app.set_workspace_rule_values(ModelRc::new(VecModel::from(values)));
     app.set_workspace_rule_targets(ModelRc::new(VecModel::from(targets)));
+    app.set_workspace_rule_scopes(ModelRc::new(VecModel::from(scopes)));
+    app.set_workspace_rule_scope(ui.scope.clone().into());
     app.set_workspace_other_target(other_target.into());
 
     logs::logs_output::logs_output(
         LOG_LOCATION,
         &format!(
-            "Workspace refreshed: {} tree row(s), {} staged path(s), {} rule(s), template \"{}\".",
+            "Workspace refreshed: {} tree row(s), {} staged path(s), {} of {} rule(s) shown for \"{}\", new-rule scope \"{}\", template \"{}\".",
             rows.len(),
             ui.added.len(),
+            config.workspace.rules.len() - hidden,
             config.workspace.rules.len(),
+            config.workspace.directory,
+            ui.scope,
             config.workspace.template
         ),
         "info",
@@ -571,6 +650,7 @@ pub fn main_window() -> Result<(), Box<dyn std::error::Error>> {
         expanded: std::collections::HashSet::new(),
         added: Vec::new(),
         kinds: RefCell::new(None),
+        scope: config::RULE_SCOPE_GLOBAL.to_string(),
     }));
 
     // --- Language selection coming from the general settings page ----------
@@ -661,6 +741,40 @@ pub fn main_window() -> Result<(), Box<dyn std::error::Error>> {
             ),
         }
     });
+
+    // --- General settings: clear every log of an older run ----------------
+    // The file of this run is still open and must not be deleted while it is
+    // being written to, so `clear_old_logs` keeps it by name.
+    let clear_locale = locale.clone();
+    let clear_island = island.clone();
+    app.global::<CallbackBridge>()
+        .on_general_page_clear_logs(move || {
+            let locale = clear_locale.borrow();
+            match logs::logs_path::clear_old_logs() {
+                Ok(0) => dynamic_island::notify(
+                    &clear_island,
+                    locale.t("notice-logs-cleared-none").to_string(),
+                    false,
+                ),
+                Ok(removed) => dynamic_island::notify(
+                    &clear_island,
+                    notice_text(&locale, "notice-logs-cleared", &removed.to_string()),
+                    false,
+                ),
+                Err(error) => {
+                    logs::logs_output::logs_output(
+                        LOG_LOCATION,
+                        &format!("Clearing the old logs failed: {}.", error),
+                        "err",
+                    );
+                    dynamic_island::notify(
+                        &clear_island,
+                        locale.t("notice-logs-clear-failed").to_string(),
+                        true,
+                    );
+                }
+            }
+        });
 
     // --- Launchpad: start one tile ----------------------------------------
     let launch_handle = app.as_weak();
@@ -952,11 +1066,11 @@ pub fn main_window() -> Result<(), Box<dyn std::error::Error>> {
     let ws_config = config.clone();
     let ws_locale = locale.clone();
     let ws_state = workspace_ui.clone();
-    app.global::<WorkspaceBridge>().on_choose_directory(move || {
+    app.global::<WorkspaceBridge>().on_add_directory(move || {
         let Some(app) = ws_handle.upgrade() else {
             return;
         };
-        let title = ws_locale.borrow().t("workspace-set-directory").to_string();
+        let title = ws_locale.borrow().t("workspace-add-directory").to_string();
         let owner = crate::windows::window_center::main_window_handle();
         let Some(directory) = launchpad::dialog::pick_folder(owner, &title) else {
             logs::logs_output::logs_output(
@@ -971,7 +1085,20 @@ pub fn main_window() -> Result<(), Box<dyn std::error::Error>> {
             &format!("Working directory set to \"{}\".", directory),
             "info",
         );
-        ws_config.borrow_mut().workspace.directory = directory;
+        {
+            let mut guard = ws_config.borrow_mut();
+            // Adding a folder that is already known simply switches to it; the
+            // list must not collect duplicates.
+            if !guard
+                .workspace
+                .directories
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(&directory))
+            {
+                guard.workspace.directories.push(directory.clone());
+            }
+            guard.workspace.directory = directory;
+        }
         // The expanded paths belong to the old tree and mean nothing in the new
         // one, so the new directory starts fully collapsed.
         ws_state.borrow_mut().expanded.clear();
@@ -983,6 +1110,52 @@ pub fn main_window() -> Result<(), Box<dyn std::error::Error>> {
             &ws_state.borrow(),
         );
     });
+
+    // Switch between the known working directories from the drop-down. The
+    // rules list follows immediately, because local rules belong to exactly one
+    // directory.
+    let ws_handle = app.as_weak();
+    let ws_config = config.clone();
+    let ws_locale = locale.clone();
+    let ws_state = workspace_ui.clone();
+    app.global::<WorkspaceBridge>()
+        .on_directory_selected(move |index| {
+            let Some(app) = ws_handle.upgrade() else {
+                return;
+            };
+            let index = index.max(0) as usize;
+            let selected = ws_config
+                .borrow()
+                .workspace
+                .directories
+                .get(index)
+                .cloned();
+            let Some(directory) = selected else {
+                logs::logs_output::logs_output(
+                    LOG_LOCATION,
+                    &format!("Directory selection {} does not exist.", index),
+                    "warn",
+                );
+                return;
+            };
+            if ws_config.borrow().workspace.directory.eq_ignore_ascii_case(&directory) {
+                return;
+            }
+            logs::logs_output::logs_output(
+                LOG_LOCATION,
+                &format!("Switched the working directory to \"{}\".", directory),
+                "info",
+            );
+            ws_config.borrow_mut().workspace.directory = directory;
+            ws_state.borrow_mut().expanded.clear();
+            save_config(&ws_config, "working directory switched");
+            refresh_workspace(
+                &app,
+                &ws_config.borrow(),
+                &ws_locale.borrow(),
+                &ws_state.borrow(),
+            );
+        });
 
     // Expand / collapse one folder row of the tree.
     let ws_handle = app.as_weak();
@@ -1240,23 +1413,42 @@ pub fn main_window() -> Result<(), Box<dyn std::error::Error>> {
     let ws_config = config.clone();
     let ws_locale = locale.clone();
     let ws_state = workspace_ui.clone();
+    let ws_island = island.clone();
     app.global::<WorkspaceBridge>().on_add_rule(move || {
         let Some(app) = ws_handle.upgrade() else {
             return;
         };
-        ws_config
-            .borrow_mut()
-            .workspace
-            .rules
-            .push(config::ClassifyRule {
+        let scope = ws_state.borrow().scope.clone();
+        let directory = ws_config.borrow().workspace.directory.clone();
+        if scope == config::RULE_SCOPE_LOCAL && directory.trim().is_empty() {
+            logs::logs_output::logs_output(
+                LOG_LOCATION,
+                "A local rule cannot be added before a working directory is set.",
+                "warn",
+            );
+            dynamic_island::notify(
+                &ws_island,
+                ws_locale.borrow().t("workspace-need-directory").to_string(),
+                true,
+            );
+            return;
+        }
+        {
+            let mut guard = ws_config.borrow_mut();
+            let local = scope == config::RULE_SCOPE_LOCAL;
+            guard.workspace.rules.push(config::ClassifyRule {
                 kind: "ext".to_string(),
                 value: String::new(),
                 target: String::new(),
+                scope: scope.clone(),
+                directory: if local { directory } else { String::new() },
             });
+        }
         logs::logs_output::logs_output(
             LOG_LOCATION,
             &format!(
-                "Classification rule added ({} rule(s) now).",
+                "Classification rule added with {} scope ({} rule(s) now).",
+                scope,
                 ws_config.borrow().workspace.rules.len()
             ),
             "info",
@@ -1269,6 +1461,109 @@ pub fn main_window() -> Result<(), Box<dyn std::error::Error>> {
             &ws_state.borrow(),
         );
     });
+
+    // Scope selected for the next rule. Choosing "local" without a working
+    // directory is refused with the same notice the other directory actions use.
+    let ws_handle = app.as_weak();
+    let ws_config = config.clone();
+    let ws_locale = locale.clone();
+    let ws_state = workspace_ui.clone();
+    let ws_island = island.clone();
+    app.global::<WorkspaceBridge>()
+        .on_rule_scope_chosen(move |scope| {
+            let Some(app) = ws_handle.upgrade() else {
+                return;
+            };
+            let scope = scope.to_string();
+            let local = scope == config::RULE_SCOPE_LOCAL;
+            if local
+                && ws_config
+                    .borrow()
+                    .workspace
+                    .directory
+                    .trim()
+                    .is_empty()
+            {
+                logs::logs_output::logs_output(
+                    LOG_LOCATION,
+                    "A local scope needs a working directory first.",
+                    "warn",
+                );
+                dynamic_island::notify(
+                    &ws_island,
+                    ws_locale.borrow().t("workspace-need-directory").to_string(),
+                    true,
+                );
+                return;
+            }
+            ws_state.borrow_mut().scope = scope.clone();
+            app.set_workspace_rule_scope(scope.clone().into());
+            logs::logs_output::logs_output(
+                LOG_LOCATION,
+                &format!("Scope of the next rule set to \"{}\".", scope),
+                "info",
+            );
+        });
+
+    // Per-row chip: moves an existing rule between global and local scope.
+    let ws_handle = app.as_weak();
+    let ws_config = config.clone();
+    let ws_locale = locale.clone();
+    let ws_state = workspace_ui.clone();
+    let ws_island = island.clone();
+    app.global::<WorkspaceBridge>()
+        .on_rule_scope_toggled(move |index| {
+            let Some(app) = ws_handle.upgrade() else {
+                return;
+            };
+            let index = index.max(0) as usize;
+            let directory = ws_config.borrow().workspace.directory.clone();
+            {
+                let mut guard = ws_config.borrow_mut();
+                let Some(config_index) = ui_rule_index(&guard, index) else {
+                    return;
+                };
+                let local = guard.workspace.rules[config_index].scope
+                    == config::RULE_SCOPE_LOCAL;
+                if !local && directory.trim().is_empty() {
+                    logs::logs_output::logs_output(
+                        LOG_LOCATION,
+                        "A local rule needs a working directory first.",
+                        "warn",
+                    );
+                    dynamic_island::notify(
+                        &ws_island,
+                        ws_locale.borrow().t("workspace-need-directory").to_string(),
+                        true,
+                    );
+                    return;
+                }
+                let changed_to = if local {
+                    config::RULE_SCOPE_GLOBAL
+                } else {
+                    config::RULE_SCOPE_LOCAL
+                };
+                let rule = &mut guard.workspace.rules[config_index];
+                rule.scope = changed_to.to_string();
+                if local {
+                    rule.directory.clear();
+                } else {
+                    rule.directory = directory;
+                }
+                logs::logs_output::logs_output(
+                    LOG_LOCATION,
+                    &format!("Rule {} scope changed to \"{}\".", index + 1, changed_to),
+                    "info",
+                );
+            }
+            save_config(&ws_config, "classification rule scope changed");
+            refresh_workspace(
+                &app,
+                &ws_config.borrow(),
+                &ws_locale.borrow(),
+                &ws_state.borrow(),
+            );
+        });
 
     let ws_config = config.clone();
     let ws_state = workspace_ui.clone();
@@ -1422,17 +1717,20 @@ pub fn main_window() -> Result<(), Box<dyn std::error::Error>> {
         };
         {
             let mut config = ws_config.borrow_mut();
-            match config
-                .workspace
-                .rules
-                .iter_mut()
-                .find(|rule| rule.kind == "other")
-            {
-                Some(rule) => rule.target = folder.clone(),
+            // Only the fallback rule of the current directory is changed; the
+            // fallback of another directory must stay untouched.
+            let directory = config.workspace.directory.clone();
+            let existing = visible_rule_indices(&config)
+                .into_iter()
+                .find(|index| config.workspace.rules[*index].kind == "other");
+            match existing {
+                Some(index) => config.workspace.rules[index].target = folder.clone(),
                 None => config.workspace.rules.push(config::ClassifyRule {
                     kind: "other".to_string(),
                     value: String::new(),
                     target: folder.clone(),
+                    scope: config::RULE_SCOPE_GLOBAL.to_string(),
+                    directory,
                 }),
             }
         }
@@ -1460,7 +1758,11 @@ pub fn main_window() -> Result<(), Box<dyn std::error::Error>> {
         };
         {
             let mut config = ws_config.borrow_mut();
-            config.workspace.rules.retain(|rule| rule.kind != "other");
+            let directory = config.workspace.directory.clone();
+            config
+                .workspace
+                .rules
+                .retain(|rule| !(rule.kind == "other" && rule_visible(rule, &directory)));
         }
         logs::logs_output::logs_output(LOG_LOCATION, "Fallback rule removed.", "info");
         save_config(&ws_config, "fallback rule removed");
@@ -1486,7 +1788,7 @@ pub fn main_window() -> Result<(), Box<dyn std::error::Error>> {
             let config = ws_config.borrow();
             (
                 config.workspace.directory.clone(),
-                config.workspace.rules.clone(),
+                rules_for_directory(&config),
             )
         };
         let Some(workdir) = workspace::usable_directory(&directory) else {
